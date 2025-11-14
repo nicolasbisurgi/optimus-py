@@ -9,6 +9,8 @@ jobs:
   build-windows:
     name: Build on Windows
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,19 +26,72 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: Build executable
+      - name: Generate PyInstaller spec file
         run: |
-          pyinstaller --onefile `
-          --name "optimuspy" `
-          --add-data "execution_mode.py;." `
-          --add-data "executors.py;." `
-          --add-data "results.py;." `
-          --hidden-import "seaborn" `
-          --console optimuspy.py
+          $specContent = @"
+          # -*- mode: python ; coding: utf-8 -*-
+
+          a = Analysis(
+              ['optimuspy.py'],
+              pathex=[],
+              binaries=[],
+              datas=[('execution_mode.py', '.'), ('executors.py', '.'), ('results.py', '.')],
+              hiddenimports=['seaborn', 'execution_mode', 'executors', 'results','win32timezone'],
+              hookspath=[],
+              hooksconfig={},
+              runtime_hooks=[],
+              excludes=[],
+              noarchive=False,
+              optimize=0,
+          )
+          pyz = PYZ(a.pure)
+
+          exe = EXE(
+              pyz,
+              a.scripts,
+              a.binaries,
+              a.datas,
+              [],
+              name='optimuspy',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=True,
+              upx_exclude=[],
+              runtime_tmpdir=None,
+              console=True,
+              disable_windowed_traceback=False,
+              argv_emulation=False,
+              target_arch=None,
+              codesign_identity=None,
+              entitlements_file=None,
+          )
+          "@
+          Set-Content -Path "optimuspy.spec" -Value $specContent
+
+      - name: Build executable
+        run: pyinstaller optimuspy.spec
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: optimuspy-winOS
+          name: optimuspy-windows
           path: dist/optimuspy.exe
           retention-days: 180
+
+      - name: Attach to latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/optimuspy.exe
+          tag_name: latest
+          name: Latest Build
+          body: |
+            Latest Windows executable build from master branch.
+
+            **Download:** optimuspy.exe
+
+            This executable is automatically built and updated on every merge to master.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
