@@ -13,3 +13,13 @@ class ExecutionMode(Enum):
                 return member
         # default
         return cls.ALL
+
+    @property
+    def label(self) -> str:
+        """Return human-readable label for the execution mode."""
+        labels = {
+            ExecutionMode.ORIGINAL_ORDER: "Original Order",
+            ExecutionMode.ITERATIONS: "Iterations",
+            ExecutionMode.RESULT: "Result",
+        }
+        return labels.get(self, self.name)

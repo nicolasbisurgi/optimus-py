@@ -93,14 +93,12 @@ class PermutationResult:
         return SEPARATOR.join(self.build_header()) + "\n"
 
     def to_row(self, view_name: str, process_name: str, original_order_result: 'PermutationResult') -> List[str]:
-        from optimuspy import LABEL_MAP
-
         median_query_time = float(self.median_query_time(view_name))
         original_median_query_time = float(original_order_result.median_query_time(view_name))
         query_time_ratio = median_query_time / original_median_query_time - 1
         row = [
             str(self.permutation_id),
-            LABEL_MAP[self.mode],
+            self.mode.label,
             str(self.is_best),
             median_query_time,
             query_time_ratio]
@@ -250,8 +248,6 @@ class OptimusResult:
 
     @property
     def original_order_result(self) -> PermutationResult:
-        from optimuspy import ExecutionMode
-
         for result in self.permutation_results:
             if result.mode == ExecutionMode.ORIGINAL_ORDER:
                 return result
