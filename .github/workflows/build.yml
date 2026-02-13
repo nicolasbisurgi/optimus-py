@@ -5,16 +5,19 @@ on:
     branches:
       - master
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build on Windows
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
@@ -25,18 +28,16 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build executable
-        run: |
-          pyinstaller --onefile `
-          --name "optimuspy" `
-          --add-data "executors.py:." `
-          --add-data "results.py:." `
-          --add-data "execution_mode.py:." `
-          --console `
-          optimuspy.py
+        run: pyinstaller optimuspy.spec
 
-      - name: Upload executable artifact
-        uses: actions/upload-artifact@v3
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: optimuspy-winOS
-          path: dist/optimuspy.exe
-          retention-days: 180
+          tag_name: build-${{ steps.sha.outputs.short }}
+          name: Build ${{ steps.sha.outputs.short }}
+          body: "Automated build from commit ${{ github.sha }}"
+          files: dist/optimuspy.exe
