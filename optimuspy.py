@@ -41,7 +41,6 @@ def set_current_directory():
     os.chdir(directory)
     return directory
 
-
 def configure_logging():
     logging.basicConfig(
         filename=LOGFILE,
