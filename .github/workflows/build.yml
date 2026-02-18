@@ -5,6 +5,9 @@ on:
     branches:
       - master
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build on Windows
@@ -13,10 +16,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
@@ -26,72 +29,17 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: Generate PyInstaller spec file
-        run: |
-          $specContent = @"
-          # -*- mode: python ; coding: utf-8 -*-
-
-          a = Analysis(
-              ['optimuspy.py'],
-              pathex=[],
-              binaries=[],
-              datas=[('execution_mode.py', '.'), ('executors.py', '.'), ('results.py', '.')],
-              hiddenimports=['seaborn', 'execution_mode', 'executors', 'results','win32timezone'],
-              hookspath=[],
-              hooksconfig={},
-              runtime_hooks=[],
-              excludes=[],
-              noarchive=False,
-              optimize=0,
-          )
-          pyz = PYZ(a.pure)
-
-          exe = EXE(
-              pyz,
-              a.scripts,
-              a.binaries,
-              a.datas,
-              [],
-              name='optimuspy',
-              debug=False,
-              bootloader_ignore_signals=False,
-              strip=False,
-              upx=True,
-              upx_exclude=[],
-              runtime_tmpdir=None,
-              console=True,
-              disable_windowed_traceback=False,
-              argv_emulation=False,
-              target_arch=None,
-              codesign_identity=None,
-              entitlements_file=None,
-          )
-          "@
-          Set-Content -Path "optimuspy.spec" -Value $specContent
-
       - name: Build executable
         run: pyinstaller optimuspy.spec
 
-      - name: Upload executable artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: optimuspy-windows
-          path: dist/optimuspy.exe
-          retention-days: 180
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
 
-      - name: Attach to latest release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: build-${{ steps.sha.outputs.short }}
+          name: Build ${{ steps.sha.outputs.short }}
+          body: "Automated build from commit ${{ github.sha }}"
           files: dist/optimuspy.exe
-          tag_name: latest
-          name: Latest Build
-          body: |
-            Latest Windows executable build from master branch.
-
-            **Download:** optimuspy.exe
-
-            This executable is automatically built and updated on every merge to master.
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

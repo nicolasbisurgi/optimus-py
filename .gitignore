@@ -4,6 +4,5 @@ dist/
 build/
 __pycache__/
 *.pyc
-*.spec
 results/
 *.log
