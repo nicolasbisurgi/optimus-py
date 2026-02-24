@@ -202,25 +202,32 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
 def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str]) -> bool:
     logging.info(f"SET mode: applying dimension order for cube '{cube_name}' to: {target_order}")
 
+    original_performance_monitor_state = None
     ram_before = None
     try:
+        original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
         activate_performance_monitor(tm1)
         ram_before = retrieve_ram_usage(tm1, cube_name)
     except Exception:
         pass
 
-    tm1.cubes.update_storage_dimension_order(cube_name, target_order)
-    logging.info(f"Dimension order updated for cube '{cube_name}'")
-
     try:
-        time.sleep(5)
-        ram_after = retrieve_ram_usage(tm1, cube_name)
-        if ram_before and ram_after:
-            logging.info(f"RAM before: {ram_before / 1024 ** 3:.2f} GB, after: {ram_after / 1024 ** 3:.2f} GB")
-    except Exception:
-        pass
+        tm1.cubes.update_storage_dimension_order(cube_name, target_order)
+        logging.info(f"Dimension order updated for cube '{cube_name}'")
 
-    return True
+        try:
+            time.sleep(5)
+            ram_after = retrieve_ram_usage(tm1, cube_name)
+            if ram_before and ram_after:
+                logging.info(f"RAM before: {ram_before / 1024 ** 3:.2f} GB, after: {ram_after / 1024 ** 3:.2f} GB")
+        except Exception:
+            pass
+
+        return True
+    finally:
+        with suppress(Exception):
+            if original_performance_monitor_state is not None and not original_performance_monitor_state:
+                deactivate_performance_monitor(tm1)
 
 
 def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str],
@@ -238,6 +245,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str
 
     context = ExecutionContext()
     permutation_results = []
+    optimus_result = None
 
     try:
         # Benchmark original order
@@ -292,7 +300,8 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str
                 deactivate_performance_monitor(tm1)
 
         if permutation_results:
-            optimus_result = OptimusResult(cube_name, permutation_results)
+            if optimus_result is None:
+                optimus_result = OptimusResult(cube_name, permutation_results)
             file_base = RESULT_FILENAME.format(cube_name, TIME_STAMP)
 
             optimus_result.to_png(RESULT_PATH / f"{file_base}.png")

@@ -11,8 +11,7 @@ class ExecutionMode(Enum):
         for member in cls:
             if member.name.lower() == value.lower():
                 return member
-        # default
-        return cls.ALL
+        raise ValueError(f"{value} is not a valid {cls.__name__}")
 
     @property
     def label(self) -> str:

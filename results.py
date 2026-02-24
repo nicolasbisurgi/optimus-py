@@ -65,7 +65,7 @@ class PermutationResult:
         self.include_process = bool(process_names)
 
         # from original dimension order
-        if ram_usage:
+        if ram_usage is not None:
             self.ram_usage = ram_usage
             context.set_initial_ram(ram_usage)
         # from all other dimension orders
