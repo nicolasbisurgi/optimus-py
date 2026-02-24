@@ -211,7 +211,7 @@ class OptimusResult:
             file_name = file_name.with_suffix(".csv")
             return self.to_csv(file_name)
 
-    def to_png(self, file_name: str):
+    def to_png(self, file_name):
         df = self.to_dataframe()
 
         plt.figure(figsize=(8, 8))

@@ -1,32 +1,25 @@
 import argparse
 import configparser
+import json
 import logging
 import os
 import sys
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Iterable, List, Union
+from typing import List
 
 from TM1py import TM1Service
 from mdxpy import MdxBuilder, Member, MdxHierarchySet
 
-from executors import ExecutionMode, OriginalOrderExecutor, MainExecutor
-from results import OptimusResult
+from executors import OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor
+from results import ExecutionContext, OptimusResult
 
 APP_NAME = "optimuspy"
 TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 LOGFILE = APP_NAME + ".log"
 RESULT_PATH = Path("results/")
-RESULT_CSV = "{}_{}_{}_{}_{}.csv"
-RESULT_XLSX = "{}_{}_{}_{}_{}.xlsx"
-RESULT_PNG = "{}_{}_{}_{}_{}.png"
-
-LABEL_MAP = {
-    ExecutionMode.ORIGINAL_ORDER: "Original Order",
-    ExecutionMode.ITERATIONS: "Iterations",
-    ExecutionMode.RESULT: "Result",
-    "Mean": "Mean"}
+RESULT_FILENAME = "{}_{}"  # cube_name, timestamp
 
 
 def set_current_directory():
@@ -41,6 +34,7 @@ def set_current_directory():
     os.chdir(directory)
     return directory
 
+
 def configure_logging():
     logging.basicConfig(
         filename=LOGFILE,
@@ -51,21 +45,39 @@ def configure_logging():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
-def get_tm1_config():
+def get_tm1_config(config_ini_path: str):
     config = configparser.ConfigParser()
-    config.read(r'config.ini')
+    config.read(config_ini_path)
     return config
 
 
-def convert_arg_to_bool(argument: Union[str, bool]):
-    if isinstance(argument, bool):
-        return argument
-    else:
-        if argument.lower() in ["true", "t"]:
-            return True
-        if argument.lower() in ["false", "f"]:
-            return False
-        raise ValueError("'{argument}' must be boolean or recognizable string")
+def load_cube_config(path: str) -> dict:
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
+def validate_cube_config(config: dict, mode: str):
+    required = ['instance', 'cube', 'views', 'executions', 'output']
+    for field in required:
+        if field not in config:
+            raise ValueError(f"Missing required field '{field}' in cube config")
+
+    if not isinstance(config['views'], list) or len(config['views']) == 0:
+        raise ValueError("'views' must be a non-empty list")
+
+    if mode == 'set':
+        if 'predefined_orders' not in config or len(config['predefined_orders']) != 1:
+            raise ValueError("'set' mode requires 'predefined_orders' with exactly one entry")
+
+    if 'predefined_orders' in config:
+        for order in config['predefined_orders']:
+            if not isinstance(order, list):
+                raise ValueError("Each entry in 'predefined_orders' must be a list of dimension names")
+
+    if 'orders_to_ignore' in config:
+        for order in config['orders_to_ignore']:
+            if not isinstance(order, list):
+                raise ValueError("Each entry in 'orders_to_ignore' must be a list of dimension names")
 
 
 def is_dimension_only_numeric(tm1: TM1Service, dimension_name: str) -> bool:
@@ -92,9 +104,10 @@ def build_vmm_vmt_mdx(cube_name: str):
         .to_mdx()
 
 
-def retrieve_vmm_vmt(tm1: TM1Service, cube_name: str) -> Iterable[str]:
+def retrieve_vmm_vmt(tm1: TM1Service, cube_name: str) -> tuple:
     mdx = build_vmm_vmt_mdx(cube_name)
-    return tm1.cells.execute_mdx_values(mdx)
+    values = list(tm1.cells.execute_mdx_values(mdx))
+    return str(values[0]), str(values[1])
 
 
 def write_vmm_vmt(tm1: TM1Service, cube_name: str, vmm: str, vmt: str):
@@ -121,27 +134,33 @@ def deactivate_performance_monitor(tm1: TM1Service):
     tm1.server.update_static_configuration(config)
 
 
-def get_cubes_to_optimize(tm1: TM1Service, cube_name: str) -> []:
-    model_cubes = []
-    try:
-        all_tm1_cubes = filter(lambda c: not c.startswith("}"), tm1.cubes.get_all_names())
+def retrieve_ram_usage(tm1: TM1Service, cube_name: str) -> float:
+    """Retrieve RAM usage for a cube from the performance monitor."""
+    mdx = """
+    SELECT
+    {{ [}}PerfCubes].[{}] }} ON ROWS,
+    {{ [}}StatsStatsByCube].[Total Memory Used] }} ON COLUMNS
+    FROM [}}StatsByCube]
+    WHERE ([}}TimeIntervals].[LATEST])
+    """.format(cube_name)
+    value = list(tm1.cells.execute_mdx_values(mdx=mdx))[0]
+    return float(value) if value else 0.0
 
-        if cube_name is not None:
-            if tm1.cubes.exists(cube_name = cube_name):
-                model_cubes = [cube_name]
-            else:
-                raise ValueError(f"Provided cube '{cube_name}' does not exist, nothing to optimize")
-        else:
-            model_cubes = all_tm1_cubes
-    except ValueError as e:
-        print(e)
-        
-    return model_cubes
-        
 
-def main(instance_name: str, cube_name: str, view_name: str, process_name: str, executions: int, fast: bool, output: str, update: bool,
-         dimensions_to_exclude: List[str] = None, password: str = None):
-    config = get_tm1_config()
+def main(mode: str, cube_config: dict, config_ini_path: str, password: str = None) -> bool:
+    instance_name = cube_config['instance']
+    cube_name = cube_config['cube']
+    view_names = cube_config['views']
+    process_names = cube_config.get('processes', [])
+    executions = cube_config['executions']
+    output = cube_config['output']
+    update = cube_config.get('update', False)
+    fast = cube_config.get('fast', False)
+    dimensions_to_exclude = cube_config.get('dimensions_to_exclude', [])
+    predefined_orders = cube_config.get('predefined_orders', [])
+    orders_to_ignore = cube_config.get('orders_to_ignore', [])
+
+    config = get_tm1_config(config_ini_path)
     tm1_args = dict(config[instance_name])
     tm1_args['session_context'] = APP_NAME
     if password:
@@ -149,88 +168,139 @@ def main(instance_name: str, cube_name: str, view_name: str, process_name: str, 
         tm1_args['decode_b64'] = False
 
     with TM1Service(**tm1_args) as tm1:
-        original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
-        activate_performance_monitor(tm1)
-        
-        model_cubes = get_cubes_to_optimize(tm1, cube_name)
+        # Validate cube exists
+        if not tm1.cubes.exists(cube_name):
+            logging.error(f"Cube '{cube_name}' does not exist")
+            return False
 
-        for cube_name in model_cubes:
+        # Validate views exist
+        for view_name in view_names:
             if not tm1.cubes.views.exists(cube_name, view_name, private=False):
-                logging.info(f"Skipping cube '{cube_name}' since view '{view_name}' does not exist")
-                continue
-
-            original_vmm, original_vmt = retrieve_vmm_vmt(tm1, cube_name)
-            write_vmm_vmt(tm1, cube_name, "1000000", "1000000")
-
-            logging.info(f"Starting analysis for cube '{cube_name}'")
-            initial_dimension_order = tm1.cubes.get_storage_dimension_order(cube_name=cube_name)
-            logging.info(f"Original dimension order for cube '{cube_name}' is: '{initial_dimension_order}'")
-            displayed_dimension_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
-            measure_dimension_only_numeric = is_dimension_only_numeric(tm1, initial_dimension_order[-1])
-
-            permutation_results = list()
-            try:
-
-                original_order = OriginalOrderExecutor(
-                    tm1, cube_name, [view_name], process_name, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, initial_dimension_order)
-                permutation_results += original_order.execute(reset_counter=True)
-
-                main_executor = MainExecutor(
-                    tm1, cube_name, [view_name], process_name, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, fast, dimensions_to_exclude)
-                permutation_results += main_executor.execute()
-
-                optimus_result = OptimusResult(cube_name, permutation_results)
-
-                best_permutation = optimus_result.best_result
-                logging.info(f"Completed analysis for cube '{cube_name}'")
-                if not best_permutation:
-                    tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
-                    logging.info(
-                        f"No ideal dimension order found for cube '{cube_name}'."
-                        f"Restored original dimension order for cube '{cube_name}' to {initial_dimension_order}"
-                        f"Please pick manually based on csv and png results.")
-                else:
-                    best_order = best_permutation.dimension_order
-                    if update:
-                        tm1.cubes.update_storage_dimension_order(cube_name, best_order)
-                        logging.info(f"Updated to best dimension order for cube '{cube_name}' to {best_order}")
-                    else:
-                        logging.info(f"Best order for cube '{cube_name}': {best_order}")
-                        tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
-                        logging.info(
-                            f"Restored original dimension order for cube '{cube_name}' to {initial_dimension_order}")
-            except Exception as e:
-                logging.error(f"Fatal error: {e}", exc_info=True)
+                logging.error(f"View '{view_name}' does not exist in cube '{cube_name}'")
                 return False
-            finally:
-                with suppress(Exception):
-                    write_vmm_vmt(tm1, cube_name, original_vmm, original_vmt)
 
-                with suppress(Exception):
-                    if original_performance_monitor_state:
-                        activate_performance_monitor(tm1)
-                    else:
-                        deactivate_performance_monitor(tm1)
+        # Validate processes exist
+        for process_name in process_names:
+            if not tm1.processes.exists(process_name):
+                logging.error(f"Process '{process_name}' does not exist")
+                return False
 
-                if len(permutation_results) > 0:
-                    optimus_result = OptimusResult(cube_name, permutation_results)
-                    optimus_result.to_png(
-                        view_name, process_name,
-                        RESULT_PATH / RESULT_PNG.format(instance_name, cube_name, view_name, process_name, TIME_STAMP))
+        initial_dimension_order = tm1.cubes.get_storage_dimension_order(cube_name=cube_name)
+        logging.info(f"Current dimension order for cube '{cube_name}': {initial_dimension_order}")
 
-                    if output.upper() == "XLSX":
-                        optimus_result.to_xlsx(
-                            view_name, process_name,
-                            RESULT_PATH / RESULT_XLSX.format(instance_name, cube_name, view_name, process_name, TIME_STAMP))
+        # SET mode: apply order directly, no benchmarking
+        if mode == 'set':
+            return _execute_set_mode(tm1, cube_name, predefined_orders[0])
 
-                    else:
-                        if not output.upper() == "CSV":
-                            logging.warning("Value for -o / --output must be 'CSV' or 'XLSX'. Default is CSV")
-                        optimus_result.to_csv(
-                            view_name, process_name,
-                            RESULT_PATH / RESULT_CSV.format(instance_name, cube_name, view_name, process_name, TIME_STAMP))
+        # OPTIMIZE mode
+        return _execute_optimize_mode(
+            tm1, cube_name, view_names, process_names, executions,
+            output, update, fast, dimensions_to_exclude, predefined_orders,
+            orders_to_ignore, initial_dimension_order)
+
+
+def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str]) -> bool:
+    logging.info(f"SET mode: applying dimension order for cube '{cube_name}' to: {target_order}")
+
+    ram_before = None
+    try:
+        activate_performance_monitor(tm1)
+        ram_before = retrieve_ram_usage(tm1, cube_name)
+    except Exception:
+        pass
+
+    tm1.cubes.update_storage_dimension_order(cube_name, target_order)
+    logging.info(f"Dimension order updated for cube '{cube_name}'")
+
+    try:
+        time.sleep(5)
+        ram_after = retrieve_ram_usage(tm1, cube_name)
+        if ram_before and ram_after:
+            logging.info(f"RAM before: {ram_before / 1024 ** 3:.2f} GB, after: {ram_after / 1024 ** 3:.2f} GB")
+    except Exception:
+        pass
+
+    return True
+
+
+def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str],
+                           process_names: List[str], executions: int, output: str, update: bool,
+                           fast: bool, dimensions_to_exclude: List[str], predefined_orders: List[List[str]],
+                           orders_to_ignore: List[List[str]], initial_dimension_order: List[str]) -> bool:
+    original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
+    activate_performance_monitor(tm1)
+
+    original_vmm, original_vmt = retrieve_vmm_vmt(tm1, cube_name)
+    write_vmm_vmt(tm1, cube_name, "1000000", "1000000")
+
+    displayed_dimension_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
+    measure_dimension_only_numeric = is_dimension_only_numeric(tm1, initial_dimension_order[-1])
+
+    context = ExecutionContext()
+    permutation_results = []
+
+    try:
+        # Benchmark original order
+        original_executor = OriginalOrderExecutor(
+            tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+            measure_dimension_only_numeric, initial_dimension_order, context)
+        permutation_results += original_executor.execute()
+
+        # Run iterations: predefined orders or greedy algorithm
+        if predefined_orders:
+            executor = PredefinedOrderExecutor(
+                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                measure_dimension_only_numeric, predefined_orders, context)
+        else:
+            executor = MainExecutor(
+                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore)
+        permutation_results += executor.execute()
+
+        optimus_result = OptimusResult(cube_name, permutation_results)
+        best_permutation = optimus_result.best_result
+        logging.info(f"Completed analysis for cube '{cube_name}'")
+
+        if not best_permutation:
+            tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
+            logging.info(
+                f"No ideal dimension order found for cube '{cube_name}'. "
+                f"Restored original order to {initial_dimension_order}. "
+                f"Please pick manually based on results.")
+        else:
+            best_order = best_permutation.dimension_order
+            if update:
+                tm1.cubes.update_storage_dimension_order(cube_name, best_order)
+                logging.info(f"Updated dimension order for cube '{cube_name}' to {best_order}")
+            else:
+                logging.info(f"Best order for cube '{cube_name}': {best_order}")
+                tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
+                logging.info(f"Restored original dimension order for cube '{cube_name}'")
+
+    except Exception as e:
+        logging.error(f"Fatal error: {e}", exc_info=True)
+        return False
+
+    finally:
+        with suppress(Exception):
+            write_vmm_vmt(tm1, cube_name, original_vmm, original_vmt)
+
+        with suppress(Exception):
+            if original_performance_monitor_state:
+                activate_performance_monitor(tm1)
+            else:
+                deactivate_performance_monitor(tm1)
+
+        if permutation_results:
+            optimus_result = OptimusResult(cube_name, permutation_results)
+            file_base = RESULT_FILENAME.format(cube_name, TIME_STAMP)
+
+            optimus_result.to_png(RESULT_PATH / f"{file_base}.png")
+
+            if output.upper() == "XLSX":
+                optimus_result.to_xlsx(RESULT_PATH / f"{file_base}.xlsx")
+            else:
+                optimus_result.to_csv(RESULT_PATH / f"{file_base}.csv")
 
     return True
 
@@ -239,77 +309,27 @@ if __name__ == "__main__":
     configure_logging()
     set_current_directory()
 
-    # take arguments from cmd
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--instance',
-                        action="store",
-                        dest="instance_name",
-                        help="name of the TM1 instance",
-                        default=None)
-    parser.add_argument('-c', '--cube',
-                        action="store",
-                        dest="cube_name",
-                        help="TM1 cube name, if left blank OptimusPy iterates over all cubes",
-                        default=None)
-    parser.add_argument('-v', '--view',
-                        action="store",
-                        dest="view_name",
-                        help="the name of the cube view to exist in all cubes",
-                        default=None)
-    parser.add_argument('-e', '--executions',
-                        action="store",
-                        dest="executions",
-                        help="number of executions per view",
-                        default=15)
-    parser.add_argument("-d","--dimensions_to_exclude",
-                        action="store",
-                        dest="dimensions_to_exclude",
-                        help="List of dimensions to exclude",
-                        default="")
-    parser.add_argument('-f', '--fast',
-                        action="store",
-                        dest="fast",
-                        help="fast mode",
-                        default=False)
-    parser.add_argument('-o', '--output',
-                        action="store",
-                        dest="output",
-                        help="csv or xlsx",
-                        default="csv")
-    parser.add_argument('-u', '--update',
-                        action="store",
-                        dest="update",
-                        help="update dimension order",
-                        default=False)
-    parser.add_argument('-p', '--password',
-                        action="store",
-                        dest="password",
-                        help="TM1 password",
-                        default=None)
-    parser.add_argument('-t', '--process',
-                        action="store",
-                        dest="process_name",
-                        help="TI Process Name",
-                        default=None)
+    parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
+    parser.add_argument('mode', choices=['optimize', 'set'],
+                        help="Run mode: 'optimize' benchmarks orders, 'set' applies a specific order")
+    parser.add_argument('cube_config', help="Path to cube JSON configuration file")
+    parser.add_argument('--config', dest='config_ini', default='config/config.ini',
+                        help="Path to TM1 connection config.ini (default: config/config.ini)")
+    parser.add_argument('-p', '--password', dest='password', default=None,
+                        help="TM1 password (overrides config.ini)")
 
     cmd_args = parser.parse_args()
-    password = cmd_args.password
-    if password:
-        # password must not be logged
-        cmd_args.password = "*****"
 
-    logging.info(f"Starting. Arguments retrieved from cmd: {cmd_args}")
+    logging.info(f"Starting OptimusPy v2.0. Mode: {cmd_args.mode}, Config: {cmd_args.cube_config}")
 
-    success = main(instance_name=cmd_args.instance_name,
-                   cube_name=cmd_args.cube_name,
-                   view_name=cmd_args.view_name,
-                   process_name=cmd_args.process_name,
-                   executions=int(cmd_args.executions),
-                   fast=convert_arg_to_bool(cmd_args.fast),
-                   output=cmd_args.output,
-                   update=convert_arg_to_bool(cmd_args.update),
-                   dimensions_to_exclude=str.split(cmd_args.dimensions_to_exclude, ","),
-                   password=password)
+    cube_config = load_cube_config(cmd_args.cube_config)
+    validate_cube_config(cube_config, cmd_args.mode)
+
+    success = main(
+        mode=cmd_args.mode,
+        cube_config=cube_config,
+        config_ini_path=cmd_args.config_ini,
+        password=cmd_args.password)
 
     if success:
         logging.info("Finished successfully")
