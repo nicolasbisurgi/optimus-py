@@ -2,7 +2,6 @@ import itertools
 import logging
 import os
 import statistics
-from pathlib import WindowsPath
 from typing import List, Union
 from execution_mode import ExecutionMode
 
@@ -13,8 +12,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 SEPARATOR = ","
-HEADER = ["ID", "Mode", "Is Best", "Mean Query Time", "Query Ratio", "Mean Process Time", "Process Ratio", "RAM",
-          "RAM in GB", "% Reduction"]
+HEADER = ["ID", "Mode", "Is Best", "Composite Query Time", "Query Ratio",
+          "Composite Process Time", "Process Ratio", "RAM", "RAM in GB", "% Reduction"]
 
 PALETTE = {
     'Original Order': 'tab:blue',
@@ -22,93 +21,110 @@ PALETTE = {
     'Iterations': 'tab:grey'
 }
 
-class PermutationResult:
-    counter = 1
-    current_ram = None
-    original_ram = None
 
-    def __init__(self, mode: str, cube_name: str, view_names: list, process_name: str, dimension_order: list,
+class ExecutionContext:
+    """Tracks mutable state across permutation evaluations within a single optimization run."""
+
+    def __init__(self):
+        self.counter = 1
+        self.current_ram = None
+        self.original_ram = None
+
+    def next_id(self) -> int:
+        pid = self.counter
+        self.counter += 1
+        return pid
+
+    def reset(self):
+        self.counter = 1
+
+    def set_initial_ram(self, ram: float):
+        self.original_ram = ram
+        self.current_ram = ram
+
+    def update_ram(self, percentage_change: float) -> float:
+        self.current_ram = self.current_ram + (self.current_ram * percentage_change / 100)
+        return self.current_ram
+
+
+class PermutationResult:
+
+    def __init__(self, context: ExecutionContext, mode: str, cube_name: str, view_names: list,
+                 process_names: list, dimension_order: list,
                  query_times_by_view: dict, process_times_by_process: dict, ram_usage: float = None,
-                 ram_percentage_change: float = None,
-                 reset_counter: bool = False):
+                 ram_percentage_change: float = None):
 
         self.mode = ExecutionMode(mode)
         self.cube_name = cube_name
         self.view_names = view_names
-        self.process_name = process_name
+        self.process_names = process_names
         self.dimension_order = dimension_order
         self.query_times_by_view = query_times_by_view
         self.process_times_by_process = process_times_by_process
         self.is_best = False
-        if process_name is None:
-            self.include_process = False
-        else:
-            self.include_process = True
+        self.include_process = bool(process_names)
 
         # from original dimension order
         if ram_usage:
             self.ram_usage = ram_usage
-            PermutationResult.original_ram = ram_usage
-
+            context.set_initial_ram(ram_usage)
         # from all other dimension orders
         elif ram_percentage_change is not None:
-            self.ram_usage = PermutationResult.current_ram + (
-                    PermutationResult.current_ram * ram_percentage_change / 100)
-
+            self.ram_usage = context.update_ram(ram_percentage_change)
         else:
             raise RuntimeError("Either 'ram_usage' or 'ram_percentage_change' must be provided")
 
-        PermutationResult.current_ram = self.ram_usage
         self.ram_percentage_change = ram_percentage_change or 0
-
-        self.ram_reduction = 1 - PermutationResult.current_ram / PermutationResult.original_ram
-
-        if reset_counter:
-            PermutationResult.counter = 1
-
-        self.permutation_id = PermutationResult.counter
-        PermutationResult.counter += 1
+        self.ram_reduction = 1 - context.current_ram / context.original_ram
+        self.permutation_id = context.next_id()
 
     def median_query_time(self, view_name: str = None) -> float:
         view_name = view_name or self.view_names[0]
         median = statistics.median(self.query_times_by_view[view_name])
         if not median:
             raise RuntimeError(f"view '{view_name}' in cube '{self.cube_name}' is too small")
-
         return median
 
     def median_process_time(self, process_name: str = None) -> float:
-        process_name = process_name or self.process_name
-        median = statistics.median(self.process_times_by_process[process_name])
-        return median
+        process_name = process_name or self.process_names[0]
+        return statistics.median(self.process_times_by_process[process_name])
+
+    def composite_query_time(self) -> float:
+        """Median of median query times across all views."""
+        medians = [statistics.median(times) for times in self.query_times_by_view.values()]
+        return statistics.median(medians) if len(medians) > 1 else medians[0]
+
+    def composite_process_time(self) -> float:
+        """Median of median process times across all processes."""
+        if not self.process_times_by_process:
+            return 0.0
+        medians = [statistics.median(times) for times in self.process_times_by_process.values()]
+        return statistics.median(medians) if len(medians) > 1 else medians[0]
 
     def build_header(self) -> list:
-        dimensions = []
-        for d in range(1, len(self.dimension_order) + 1):
-            dimensions.append("Dimension" + str(d))
-        header = HEADER + dimensions
-        return header
+        dimensions = ["Dimension" + str(d) for d in range(1, len(self.dimension_order) + 1)]
+        return HEADER + dimensions
 
     def build_csv_header(self) -> str:
         return SEPARATOR.join(self.build_header()) + "\n"
 
-    def to_row(self, view_name: str, process_name: str, original_order_result: 'PermutationResult') -> List[str]:
-        median_query_time = float(self.median_query_time(view_name))
-        original_median_query_time = float(original_order_result.median_query_time(view_name))
-        query_time_ratio = median_query_time / original_median_query_time - 1
+    def to_row(self, original_order_result: 'PermutationResult') -> List[str]:
+        composite_qt = self.composite_query_time()
+        original_composite_qt = original_order_result.composite_query_time()
+        query_time_ratio = composite_qt / original_composite_qt - 1
+
         row = [
             str(self.permutation_id),
             self.mode.label,
             str(self.is_best),
-            median_query_time,
+            composite_qt,
             query_time_ratio]
 
-        if process_name is not None:
-            median_process_time = float(self.median_process_time(process_name))
-            original_median_process_time = float(original_order_result.median_process_time(process_name))
-            process_time_ratio = median_process_time / original_median_process_time - 1
-            row += [median_process_time, process_time_ratio]
-
+        if self.include_process:
+            composite_pt = self.composite_process_time()
+            original_composite_pt = original_order_result.composite_process_time()
+            process_time_ratio = composite_pt / original_composite_pt - 1
+            row += [composite_pt, process_time_ratio]
         else:
             row += [0, 0]
 
@@ -117,8 +133,8 @@ class PermutationResult:
 
         return row
 
-    def to_csv_row(self, view_name: str, process_name: str, original_order_result: 'PermutationResult') -> str:
-        row = [str(i) for i in self.to_row(view_name, process_name, original_order_result)]
+    def to_csv_row(self, original_order_result: 'PermutationResult') -> str:
+        row = [str(i) for i in self.to_row(original_order_result)]
         return SEPARATOR.join(row) + "\n"
 
 
@@ -126,7 +142,6 @@ class OptimusResult:
     TEXT_FONT_SIZE = 5
 
     def __init__(self, cube_name: str, permutation_results: List[PermutationResult]):
-
         self.cube_name = cube_name
         self.permutation_results = permutation_results
         if len(permutation_results) == 0:
@@ -136,53 +151,43 @@ class OptimusResult:
         self.best_result = self.determine_best_result()
         if self.best_result:
             for permutation_result in permutation_results:
-                if permutation_result.permutation_id == self.best_result.permutation_id and permutation_result.mode != ExecutionMode.ORIGINAL_ORDER:
+                if (permutation_result.permutation_id == self.best_result.permutation_id
+                        and permutation_result.mode != ExecutionMode.ORIGINAL_ORDER):
                     permutation_result.is_best = True
                     permutation_result.mode = ExecutionMode.RESULT
 
-    def to_dataframe(self, view_name: str, process_name: str) -> pd.DataFrame:
+    def to_dataframe(self) -> pd.DataFrame:
         header = self.permutation_results[0].build_header()
-        rows = []
-        for result in self.permutation_results:
-            rows.append(result.to_row(view_name, process_name, self.original_order_result))
-
+        rows = [r.to_row(self.original_order_result) for r in self.permutation_results]
         return pd.DataFrame(rows, columns=header)
 
-    def to_lines(self, view_name: str, process_name: str) -> List[str]:
+    def to_lines(self) -> List[str]:
         lines = itertools.chain(
             [self.permutation_results[0].build_csv_header()],
-            [result.to_csv_row(view_name, process_name, self.original_order_result) for result in
-             self.permutation_results])
-
+            [r.to_csv_row(self.original_order_result) for r in self.permutation_results])
         return list(lines)
 
-    def to_csv(self, view_name: str, process_name: str, file_name: 'WindowsPath'):
-        lines = self.to_lines(view_name, process_name)
-
+    def to_csv(self, file_name):
+        lines = self.to_lines()
         os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
         with open(str(file_name), "w") as file:
             file.writelines(lines)
 
-    def to_xlsx(self, view_name: str, process_name: str, file_name: 'WindowsPath'):
+    def to_xlsx(self, file_name):
         try:
             import xlsxwriter
 
-            # Create a workbook and add a worksheet.
             workbook = xlsxwriter.Workbook(file_name)
             worksheet = workbook.add_worksheet()
 
-
             line_data = []
 
-            # Set up some formats for the Header, Original order, Best result and Iterations
-            header_format    = workbook.add_format({'bold': True})
-            original_format  = workbook.add_format({'bg_color': '#DCE6F1'})  # Light blue = Original order
-            result_format    = workbook.add_format({'bg_color': '#B3FBC1'})  # Light green = Result or Best
-            iteration_format = workbook.add_format({'bg_color': '#FFFFFF'})  # White = Other Iteration
+            header_format = workbook.add_format({'bold': True})
+            original_format = workbook.add_format({'bg_color': '#DCE6F1'})
+            result_format = workbook.add_format({'bg_color': '#B3FBC1'})
+            iteration_format = workbook.add_format({'bg_color': '#FFFFFF'})
 
-            # Iterate over the data and write it out row by row.
-            for row, line in enumerate(self.to_lines(view_name, process_name)):
-
+            for row, line in enumerate(self.to_lines()):
                 line_data = line.split(SEPARATOR)
                 if "Original" in line_data[1]:
                     row_format = original_format
@@ -196,7 +201,6 @@ class OptimusResult:
                 for col, item in enumerate(line_data):
                     worksheet.write(row, col, item, row_format)
 
-            # Add filters to the first row
             if line_data:
                 worksheet.autofilter(0, 0, 0, len(line_data) - 1)
 
@@ -205,11 +209,10 @@ class OptimusResult:
         except ImportError:
             logging.warning("Failed to import xlsxwriter. Writing to csv instead")
             file_name = file_name.with_suffix(".csv")
-            return self.to_csv(view_name, process_name, file_name)
+            return self.to_csv(file_name)
 
-    # create scatter plot ram vs. performance
-    def to_png(self, view_name: str, process_name: str, file_name: str):
-        df = self.to_dataframe(view_name, process_name)
+    def to_png(self, file_name: str):
+        df = self.to_dataframe()
 
         plt.figure(figsize=(8, 8))
         sns.set_style("ticks")
@@ -218,13 +221,13 @@ class OptimusResult:
             data=df,
             x="RAM in GB",
             y="Query Ratio",
-            size="Mean Process Time" if process_name is not None else None,
+            size="Composite Process Time" if self.include_process else None,
             hue="Mode",
             palette=PALETTE,
             edgecolors="black",
             legend=True,
             alpha=0.8,
-            sizes=(20, 500) if process_name is not None else None)
+            sizes=(20, 500) if self.include_process else None)
 
         for index, row in df.iterrows():
             p.text(row["RAM in GB"],
@@ -242,7 +245,6 @@ class OptimusResult:
         plt.tight_layout()
 
         os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
-
         plt.savefig(file_name, dpi=400)
         plt.clf()
 
@@ -253,39 +255,35 @@ class OptimusResult:
                 return result
 
     def determine_best_result(self) -> Union[PermutationResult, None]:
-        ram_range = [result.ram_usage for result in self.permutation_results]
+        ram_range = [r.ram_usage for r in self.permutation_results]
         min_ram, max_ram = min(ram_range), max(ram_range)
 
-        query_speed_range = [result.median_query_time() for result in self.permutation_results]
-        min_query_speed, max_query_speed = min(query_speed_range), max(query_speed_range)
+        query_range = [r.composite_query_time() for r in self.permutation_results]
+        min_query, max_query = min(query_range), max(query_range)
 
         if self.include_process:
-            process_speed_range = [result.median_process_time(result.process_name)
-                                   for result
-                                   in self.permutation_results]
-            min_process_execution, max_process_execution = min(process_speed_range), max(process_speed_range)
+            process_range = [r.composite_process_time() for r in self.permutation_results]
+            min_process, max_process = min(process_range), max(process_range)
         else:
-            min_process_execution = max_process_execution = 1
+            min_process = max_process = 1
 
-            # find a good balance between speed and ram and process speed
+        # find a good balance between speed and ram and process speed
         for value in (0.01, 0.025, 0.05):
             ram_threshold = min_ram + value * (max_ram - min_ram)
-            query_speed_threshold = min_query_speed + value * (max_query_speed - min_query_speed)
+            query_threshold = min_query + value * (max_query - min_query)
 
             if self.include_process:
-                process_speed_threshold = min_process_execution + value * (
-                        max_process_execution - min_process_execution)
-                for permutation_result in self.permutation_results:
-                    if all([permutation_result.ram_usage <= ram_threshold,
-                            permutation_result.median_query_time() <= query_speed_threshold,
-                            permutation_result.median_process_time() <= process_speed_threshold]):
-                        return permutation_result
-
+                process_threshold = min_process + value * (max_process - min_process)
+                for r in self.permutation_results:
+                    if (r.ram_usage <= ram_threshold
+                            and r.composite_query_time() <= query_threshold
+                            and r.composite_process_time() <= process_threshold):
+                        return r
             else:
-                for permutation_result in self.permutation_results:
-                    if all([permutation_result.ram_usage <= ram_threshold,
-                            permutation_result.median_query_time() <= query_speed_threshold]):
-                        return permutation_result
+                for r in self.permutation_results:
+                    if (r.ram_usage <= ram_threshold
+                            and r.composite_query_time() <= query_threshold):
+                        return r
 
         # no dimension order falls in sweet spot
         return None
