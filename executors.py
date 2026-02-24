@@ -7,7 +7,7 @@ from typing import List, Dict
 from TM1py import TM1Service, Process
 
 from execution_mode import ExecutionMode
-from results import PermutationResult
+from results import ExecutionContext, PermutationResult
 
 
 def swap(order: list, i1, i2) -> List[str]:
@@ -23,19 +23,20 @@ def swap_random(order: list) -> List[str]:
 
 
 class OptipyzerExecutor:
-    def __init__(self, tm1: TM1Service, cube_name: str, view_names: list, process_name: str,
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  displayed_dimension_order: List[str],
-                 executions: int, measure_dimension_only_numeric: bool):
+                 executions: int, measure_dimension_only_numeric: bool, context: ExecutionContext):
         self.tm1 = tm1
         self.cube_name = cube_name
         self.view_names = view_names
-        self.process_name = process_name
+        self.process_names = process_names
         self.dimensions = displayed_dimension_order
         self.executions = executions
         self.measure_dimension_only_numeric = measure_dimension_only_numeric
         self.mode = None
-        self.include_process = bool(process_name)
+        self.include_process = bool(process_names)
         self.cube_dim_number = len(self.dimensions)
+        self.context = context
 
     def _determine_query_permutation_result(self) -> Dict[str, List[float]]:
         query_times_by_view = {}
@@ -51,22 +52,21 @@ class OptipyzerExecutor:
         return query_times_by_view
 
     def _determine_process_permutation_result(self) -> Dict[str, List[float]]:
-        execution_times = []
-        for _ in range(self.executions):
-            self.clear_cube_cache()
-            before = time.time()
-            try:
-                success, status, _ = self.tm1.processes.execute_with_return(process_name=self.process_name)
-            except Exception as e:
-                raise e
-            if not success:
-                raise RuntimeError(f"Process: '{self.process_name}' not successful; Status: '{status}'")
-            execution_times.append(time.time() - before)
-
-        return {self.process_name: execution_times}
+        process_times_by_process = {}
+        for process_name in self.process_names:
+            execution_times = []
+            for _ in range(self.executions):
+                self.clear_cube_cache()
+                before = time.time()
+                success, status, _ = self.tm1.processes.execute_with_return(process_name=process_name)
+                if not success:
+                    raise RuntimeError(f"Process: '{process_name}' not successful; Status: '{status}'")
+                execution_times.append(time.time() - before)
+            process_times_by_process[process_name] = execution_times
+        return process_times_by_process
 
     def _evaluate_permutation(self, permutation: List[str], retrieve_ram: bool = False,
-                              reset_counter: bool = False, is_original_order: bool = False,
+                              is_original_order: bool = False,
                               total_permutations=None) -> PermutationResult:
         ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(self.cube_name, permutation)
         query_times_by_view = self._determine_query_permutation_result()
@@ -79,24 +79,23 @@ class OptipyzerExecutor:
         if retrieve_ram:
             ram_usage = self._retrieve_ram_usage()
 
-        permutation_result = PermutationResult(self.mode, self.cube_name, self.view_names, self.process_name,
-                                               permutation,
-                                               query_times_by_view, process_times_by_process, ram_usage,
-                                               ram_percentage_change, reset_counter)
+        permutation_result = PermutationResult(
+            self.context, self.mode, self.cube_name, self.view_names, self.process_names,
+            permutation, query_times_by_view, process_times_by_process, ram_usage,
+            ram_percentage_change)
 
         if is_original_order:
             progress_log = "Original Order"
         else:
-            # decrease counter by 2 because log happens post increment and original order not considered as iteration
-            progress_log = f"Iteration {PermutationResult.counter - 2} of {total_permutations}"
+            progress_log = f"Iteration {self.context.counter - 2} of {total_permutations}"
 
         process_log = " - No process included in test"
         if self.include_process:
-            process_log = f" - Process time [s]: {permutation_result.median_process_time():.5f}"
+            process_log = f" - Composite process time [s]: {permutation_result.composite_process_time():.5f}"
 
         logging.info(f"{progress_log} - Evaluated order: {permutation} "
                      f"- RAM [GB]: {permutation_result.ram_usage / 1024 ** 3:.2f} "
-                     f"- Query time [s]: {permutation_result.median_query_time():.5f}"
+                     f"- Composite query time [s]: {permutation_result.composite_query_time():.5f}"
                      + process_log)
 
         return permutation_result
@@ -105,7 +104,7 @@ class OptipyzerExecutor:
         number_of_iterations = 4
         for i in range(number_of_iterations):
             mdx = """
-            SELECT  
+            SELECT
             {{ [}}PerfCubes].[{}] }} ON ROWS,
             {{ [}}StatsStatsByCube].[Total Memory Used] }} ON COLUMNS
             FROM [}}StatsByCube]
@@ -130,39 +129,35 @@ class OptipyzerExecutor:
 
 
 class OriginalOrderExecutor(OptipyzerExecutor):
-    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_name: str, dimensions: List[str],
-                 executions: int,
-                 measure_dimension_only_numeric: bool, original_dimension_order: List[str]):
-        super().__init__(tm1, cube_name, view_names, process_name, dimensions, executions,
-                         measure_dimension_only_numeric)
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
+                 dimensions: List[str], executions: int,
+                 measure_dimension_only_numeric: bool, original_dimension_order: List[str],
+                 context: ExecutionContext):
+        super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
+                         measure_dimension_only_numeric, context)
         self.mode = ExecutionMode.ORIGINAL_ORDER
         self.original_dimension_order = original_dimension_order
 
-    def execute(self, reset_counter=True):
+    def execute(self):
         # at initial execution ram must be retrieved
         return [self._evaluate_permutation(
             self.original_dimension_order,
             retrieve_ram=True,
-            reset_counter=reset_counter,
             is_original_order=True)]
 
 
 class MainExecutor(OptipyzerExecutor):
-    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_name: str, dimensions: List[str],
-                 executions: int, measure_dimension_only_numeric: bool, fast: bool = False,
-                 dimensions_to_exclude: List[str] = None):
-        super().__init__(tm1, cube_name, view_names, process_name, dimensions, executions,
-                         measure_dimension_only_numeric)
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
+                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 context: ExecutionContext, fast: bool = False,
+                 dimensions_to_exclude: List[str] = None,
+                 orders_to_ignore: List[List[str]] = None):
+        super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
+                         measure_dimension_only_numeric, context)
         self.mode = ExecutionMode.ITERATIONS
         self.fast = fast
-        self.dimensions_to_exclude = (
-            [] if dimensions_to_exclude is None else dimensions_to_exclude
-        )
-
-        if len(view_names) > 1:
-            logging.warning("BestExecutor mode will use first view and ignore other views: " + str(view_names[1:]))
-
-        self.view_name = view_names[0]
+        self.dimensions_to_exclude = dimensions_to_exclude or []
+        self.orders_to_ignore = orders_to_ignore or []
 
     def _check_swap_dim_with_str_to_last_position(
             self, dimension_name: str, target_position: int
@@ -230,6 +225,12 @@ class MainExecutor(OptipyzerExecutor):
                         and dimension_target in dimension_pool):
                     permutation = list(resulting_order)
                     permutation = swap(permutation, target_position, original_position)
+
+                    # skip ignored orders
+                    if permutation in self.orders_to_ignore:
+                        logging.info(f"Skipping ignored order: {permutation}")
+                        continue
+
                     permutation_result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
                     permutation_results.append(permutation_result)
                     results_per_dimension.append(permutation_result)
@@ -241,13 +242,32 @@ class MainExecutor(OptipyzerExecutor):
                     best_order = sorted(
                         results_per_dimension,
                         key=lambda r: r.ram_usage)[0]
-                # for the current position - if position is lower than the mid-point - sort by view execution time
+                # for the current position - if position is lower than the mid-point - sort by composite query time
                 else:
                     best_order = sorted(
                         results_per_dimension,
-                        key=lambda r: r.median_query_time(self.view_name))[0]
+                        key=lambda r: r.composite_query_time())[0]
 
                 resulting_order = list(best_order.dimension_order)
                 dimension_pool.remove(resulting_order[target_position])
 
         return permutation_results
+
+
+class PredefinedOrderExecutor(OptipyzerExecutor):
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
+                 dimensions: List[str], executions: int,
+                 measure_dimension_only_numeric: bool, predefined_orders: List[List[str]],
+                 context: ExecutionContext):
+        super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
+                         measure_dimension_only_numeric, context)
+        self.mode = ExecutionMode.ITERATIONS
+        self.predefined_orders = predefined_orders
+
+    def execute(self) -> List[PermutationResult]:
+        total = len(self.predefined_orders)
+        results = []
+        for order in self.predefined_orders:
+            result = self._evaluate_permutation(order, total_permutations=total)
+            results.append(result)
+        return results
