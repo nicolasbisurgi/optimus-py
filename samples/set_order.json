@@ -1,0 +1,10 @@
+{
+  "instance": "tm1srv01",
+  "cube": "Sales",
+  "views": ["Optimus"],
+  "executions": 1,
+  "output": "csv",
+  "predefined_orders": [
+    ["Time", "Version", "Product", "Customer", "SalesMeasure"]
+  ]
+}
