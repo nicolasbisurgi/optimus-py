@@ -68,7 +68,9 @@ class OptipyzerExecutor:
     def _evaluate_permutation(self, permutation: List[str], retrieve_ram: bool = False,
                               is_original_order: bool = False,
                               total_permutations=None) -> PermutationResult:
+        reorder_start = time.time()
         ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(self.cube_name, permutation)
+        reorder_duration = time.time() - reorder_start
         query_times_by_view = self._determine_query_permutation_result()
 
         process_times_by_process = None
@@ -82,7 +84,7 @@ class OptipyzerExecutor:
         permutation_result = PermutationResult(
             self.context, self.mode, self.cube_name, self.view_names, self.process_names,
             permutation, query_times_by_view, process_times_by_process, ram_usage,
-            ram_percentage_change)
+            ram_percentage_change, reorder_duration)
 
         if is_original_order:
             progress_log = "Original Order"
@@ -119,6 +121,13 @@ class OptipyzerExecutor:
                 time.sleep(15)
 
         raise RuntimeError("Performance Monitor must be activated")
+
+    def _has_string_elements(self, dimension_name: str) -> bool:
+        hierarchy_name = "Leaves" if self.tm1.hierarchies.exists(
+            dimension_name=dimension_name, hierarchy_name="Leaves") else dimension_name
+        elements = self.tm1.elements.get_element_types(
+            dimension_name=dimension_name, hierarchy_name=hierarchy_name, skip_consolidations=True)
+        return any(etype != "Numeric" for etype in elements.values())
 
     def clear_cube_cache(self):
         process = Process(name="", prolog_procedure=f"DebugUtility(125 ,0 ,0 ,'{self.cube_name}' ,'' ,'');")
@@ -270,4 +279,75 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
         for order in self.predefined_orders:
             result = self._evaluate_permutation(order, total_permutations=total)
             results.append(result)
+        return results
+
+
+class PositionOptimizerExecutor(OptipyzerExecutor):
+    """Find the best dimension for a given position."""
+
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
+                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 target_position: int, context: ExecutionContext,
+                 dimensions_to_exclude: List[str] = None):
+        super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
+                         measure_dimension_only_numeric, context)
+        self.mode = ExecutionMode.ITERATIONS
+        self.target_position = target_position
+        self.dimensions_to_exclude = dimensions_to_exclude or []
+
+    def execute(self) -> List[PermutationResult]:
+        current_order = self.dimensions[:]
+        is_last = (self.target_position == len(current_order) - 1)
+        results = []
+
+        candidates = [
+            dim for dim in current_order
+            if dim != current_order[self.target_position] and dim not in self.dimensions_to_exclude
+        ]
+
+        total = len(candidates)
+        for dim in candidates:
+            if is_last and self._has_string_elements(dim):
+                logging.info(f"Skip '{dim}' — has string elements, can't be last")
+                total -= 1
+                continue
+
+            orig_idx = current_order.index(dim)
+            permutation = swap(current_order, self.target_position, orig_idx)
+            result = self._evaluate_permutation(permutation, total_permutations=total)
+            results.append(result)
+
+        return results
+
+
+class DimensionOptimizerExecutor(OptipyzerExecutor):
+    """Find the best position for a given dimension."""
+
+    def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
+                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 target_dimension: str, context: ExecutionContext):
+        super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
+                         measure_dimension_only_numeric, context)
+        self.mode = ExecutionMode.ITERATIONS
+        self.target_dimension = target_dimension
+
+    def execute(self) -> List[PermutationResult]:
+        current_order = self.dimensions[:]
+        current_idx = current_order.index(self.target_dimension)
+        has_strings = self._has_string_elements(self.target_dimension)
+        last_pos = len(current_order) - 1
+        results = []
+
+        total = last_pos if not has_strings else last_pos - 1
+        for target_pos in range(len(current_order)):
+            if target_pos == current_idx:
+                continue
+            if target_pos == last_pos and has_strings:
+                logging.info(f"Skip last position — '{self.target_dimension}' has string elements")
+                continue
+
+            permutation = swap(current_order, target_pos, current_idx)
+            result = self._evaluate_permutation(permutation, total_permutations=total)
+            results.append(result)
+
         return results

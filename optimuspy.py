@@ -12,7 +12,8 @@ from typing import List
 from TM1py import TM1Service
 from mdxpy import MdxBuilder, Member, MdxHierarchySet
 
-from executors import OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor
+from executors import (OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor,
+                       PositionOptimizerExecutor, DimensionOptimizerExecutor)
 from results import ExecutionContext, OptimusResult
 
 APP_NAME = "optimuspy"
@@ -69,6 +70,12 @@ def validate_cube_config(config: dict, mode: str):
         if 'predefined_orders' not in config or len(config['predefined_orders']) != 1:
             raise ValueError("'set' mode requires 'predefined_orders' with exactly one entry")
 
+    # Mutual exclusivity check
+    exclusive_fields = ['predefined_orders', 'optimize_position', 'optimize_dimension']
+    active = [f for f in exclusive_fields if f in config]
+    if len(active) > 1:
+        raise ValueError(f"Only one of {exclusive_fields} can be set. Found: {active}")
+
     if 'predefined_orders' in config:
         for order in config['predefined_orders']:
             if not isinstance(order, list):
@@ -78,6 +85,29 @@ def validate_cube_config(config: dict, mode: str):
         for order in config['orders_to_ignore']:
             if not isinstance(order, list):
                 raise ValueError("Each entry in 'orders_to_ignore' must be a list of dimension names")
+
+    if 'optimize_position' in config:
+        val = config['optimize_position']
+        if val not in ('first', 'last') and not isinstance(val, int):
+            raise ValueError("'optimize_position' must be 'first', 'last', or an integer (1-based)")
+        if isinstance(val, int) and val < 1:
+            raise ValueError("'optimize_position' must be >= 1")
+
+    if 'optimize_dimension' in config:
+        val = config['optimize_dimension']
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError("'optimize_dimension' must be a non-empty string")
+
+
+def resolve_position(value, num_dimensions: int) -> int:
+    if value == "first":
+        return 0
+    if value == "last":
+        return num_dimensions - 1
+    pos = int(value)
+    if pos < 1 or pos > num_dimensions:
+        raise ValueError(f"Position {pos} out of range (1-{num_dimensions})")
+    return pos - 1
 
 
 def is_dimension_only_numeric(tm1: TM1Service, dimension_name: str) -> bool:
@@ -159,6 +189,8 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
     dimensions_to_exclude = cube_config.get('dimensions_to_exclude', [])
     predefined_orders = cube_config.get('predefined_orders', [])
     orders_to_ignore = cube_config.get('orders_to_ignore', [])
+    optimize_position = cube_config.get('optimize_position')
+    optimize_dimension = cube_config.get('optimize_dimension')
 
     config = get_tm1_config(config_ini_path)
     tm1_args = dict(config[instance_name])
@@ -196,7 +228,8 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
         return _execute_optimize_mode(
             tm1, cube_name, view_names, process_names, executions,
             output, update, fast, dimensions_to_exclude, predefined_orders,
-            orders_to_ignore, initial_dimension_order)
+            orders_to_ignore, optimize_position, optimize_dimension,
+            initial_dimension_order)
 
 
 def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str]) -> bool:
@@ -233,7 +266,9 @@ def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str]) 
 def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str],
                            process_names: List[str], executions: int, output: str, update: bool,
                            fast: bool, dimensions_to_exclude: List[str], predefined_orders: List[List[str]],
-                           orders_to_ignore: List[List[str]], initial_dimension_order: List[str]) -> bool:
+                           orders_to_ignore: List[List[str]], optimize_position=None,
+                           optimize_dimension: str = None,
+                           initial_dimension_order: List[str] = None) -> bool:
     original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
     activate_performance_monitor(tm1)
 
@@ -254,8 +289,24 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str
             measure_dimension_only_numeric, initial_dimension_order, context)
         permutation_results += original_executor.execute()
 
-        # Run iterations: predefined orders or greedy algorithm
-        if predefined_orders:
+        # Run iterations: targeted, predefined, or greedy algorithm
+        if optimize_position is not None:
+            resolved_pos = resolve_position(optimize_position, len(displayed_dimension_order))
+            logging.info(f"Optimizing position {resolved_pos + 1} (0-based: {resolved_pos}) "
+                         f"for cube '{cube_name}'")
+            executor = PositionOptimizerExecutor(
+                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                measure_dimension_only_numeric, resolved_pos, context, dimensions_to_exclude)
+        elif optimize_dimension:
+            if optimize_dimension not in displayed_dimension_order:
+                raise ValueError(
+                    f"Dimension '{optimize_dimension}' not found in cube '{cube_name}'. "
+                    f"Available: {displayed_dimension_order}")
+            logging.info(f"Optimizing dimension '{optimize_dimension}' for cube '{cube_name}'")
+            executor = DimensionOptimizerExecutor(
+                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                measure_dimension_only_numeric, optimize_dimension, context)
+        elif predefined_orders:
             executor = PredefinedOrderExecutor(
                 tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
                 measure_dimension_only_numeric, predefined_orders, context)
@@ -304,6 +355,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, view_names: List[str
                 optimus_result = OptimusResult(cube_name, permutation_results)
             file_base = RESULT_FILENAME.format(cube_name, TIME_STAMP)
 
+            optimus_result.to_html(RESULT_PATH / f"{file_base}.html", total_duration=context.elapsed)
             optimus_result.to_png(RESULT_PATH / f"{file_base}.png")
 
             if output.upper() == "XLSX":
