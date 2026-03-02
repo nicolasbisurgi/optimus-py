@@ -319,61 +319,40 @@ class OptimusResult:
                 "processTime": round(r.composite_process_time(), 5) if self.include_process else None,
             })
 
-        # Build table rows
-        dim_count = len(self.permutation_results[0].dimension_order)
-        table_rows_html = ""
+        # Build permutation data for JavaScript table rendering
+        perms_data = []
         for r in self.permutation_results:
             composite_qt = r.composite_query_time()
             qt_ratio = composite_qt / original_qt - 1 if original_qt else 0
             ram_gb = float(r.ram_usage) / (1024 ** 3)
-
-            if r.mode == ExecutionMode.ORIGINAL_ORDER:
-                row_class = "row-original"
-            elif r.mode == ExecutionMode.RESULT:
-                row_class = "row-best"
-            else:
-                row_class = ""
-
-            mode_badge = r.mode.label
-            if r.mode == ExecutionMode.ORIGINAL_ORDER:
-                mode_badge = f'<span class="badge badge-original">{r.mode.label}</span>'
-            elif r.mode == ExecutionMode.RESULT:
-                mode_badge = f'<span class="badge badge-best">Best</span>'
-            else:
-                mode_badge = f'<span class="badge badge-iteration">{r.mode.label}</span>'
-
-            process_cells = ""
+            entry = {
+                "id": r.permutation_id,
+                "mode": r.mode.label,
+                "isBest": r.is_best,
+                "dims": list(r.dimension_order),
+                "qt": round(composite_qt, 10),
+                "qtRatio": round(qt_ratio, 10),
+                "ramGB": round(ram_gb, 10),
+                "ramReduction": round(r.ram_reduction, 4),
+                "reorderDur": round(r.reorder_duration, 6),
+            }
             if self.include_process:
                 composite_pt = r.composite_process_time()
                 original_pt = original.composite_process_time()
                 pt_ratio = composite_pt / original_pt - 1 if original_pt else 0
-                process_cells = f"""
-                    <td class="num">{composite_pt:.5f}</td>
-                    <td class="num {'positive' if pt_ratio > 0 else 'negative' if pt_ratio < 0 else ''}">{fmt_pct(pt_ratio)}</td>"""
+                entry["pt"] = round(composite_pt, 10)
+                entry["ptRatio"] = round(pt_ratio, 10)
+            perms_data.append(entry)
 
-            dim_cells = "".join(f"<td>{d}</td>" for d in r.dimension_order)
-
-            table_rows_html += f"""
-                <tr class="{row_class}">
-                    <td class="num">{r.permutation_id}</td>
-                    <td>{mode_badge}</td>
-                    <td class="num">{composite_qt:.5f}</td>
-                    <td class="num {'positive' if qt_ratio > 0 else 'negative' if qt_ratio < 0 else ''}">{fmt_pct(qt_ratio)}</td>
-                    {process_cells}
-                    <td class="num">{ram_gb:.2f}</td>
-                    <td class="num">{f'{r.ram_reduction:.0%}'}</td>
-                    <td class="num">{r.reorder_duration:.1f}</td>
-                    {dim_cells}
-                </tr>"""
-
-        # Process header columns
+        # Process header columns for <thead>
         process_header = ""
         if self.include_process:
             process_header = """
-                        <th>Process Time (s)</th>
-                        <th>Process Ratio</th>"""
+                        <th class="sortable" data-sort="pt">Process Time <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="ptRatio">Process Ratio <span class="sort-arrow"></span></th>"""
 
-        dim_headers = "".join(f"<th>Dim {i+1}</th>" for i in range(dim_count))
+        total_cols = 9 + (2 if self.include_process else 0)
+        include_process_js = "true" if self.include_process else "false"
 
         # Process summary cards
         process_cards = ""
@@ -476,48 +455,6 @@ class OptimusResult:
     }}
     .panel h2 {{ font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #0F172A; }}
     .chart-container {{ position: relative; height: 400px; }}
-    table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-    }}
-    th {{
-        background: #F8FAFC;
-        border-bottom: 2px solid #E2E8F0;
-        padding: 10px 12px;
-        text-align: left;
-        font-weight: 600;
-        color: #475569;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-        position: sticky;
-        top: 0;
-        z-index: 1;
-    }}
-    td {{
-        padding: 8px 12px;
-        border-bottom: 1px solid #F1F5F9;
-    }}
-    .num {{ font-family: 'SF Mono', 'Fira Code', monospace; text-align: right; }}
-    .positive {{ color: #DC2626; }}
-    .negative {{ color: #16A34A; }}
-    .row-original {{ background: #EFF6FF; }}
-    .row-best {{ background: #F0FDF4; }}
-    tr:hover {{ background: #F8FAFC; }}
-    .row-original:hover {{ background: #DBEAFE; }}
-    .row-best:hover {{ background: #DCFCE7; }}
-    .badge {{
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-    }}
-    .badge-original {{ background: #DBEAFE; color: #1E40AF; }}
-    .badge-best {{ background: #DCFCE7; color: #166534; }}
-    .badge-iteration {{ background: #F1F5F9; color: #475569; }}
     .dim-order {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }}
     .dim-tag {{
         display: inline-block;
@@ -526,13 +463,89 @@ class OptimusResult:
         font-size: 13px;
         font-weight: 500;
     }}
-    .dim-moved-up {{ background: #DCFCE7; color: #166534; }}
-    .dim-moved-down {{ background: #FEE2E2; color: #991B1B; }}
+    .dim-moved-up {{ background: #DBEAFE; color: #1E40AF; }}
+    .dim-moved-down {{ background: #FEF3C7; color: #92400E; }}
     .dim-same {{ background: #F1F5F9; color: #475569; }}
     .dim-legend {{ display: flex; gap: 12px; font-size: 12px; color: #64748B; }}
     .dim-legend .dim-tag {{ padding: 2px 8px; font-size: 11px; }}
-    .table-scroll {{ overflow-x: auto; }}
+    .positive {{ color: #DC2626; }}
+    .negative {{ color: #16A34A; }}
     .footer {{ text-align: center; padding: 24px 0; font-size: 12px; color: #94A3B8; }}
+    .podium {{ display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }}
+    .podium-card {{
+        flex: 1; min-width: 200px; background: #F8FAFC; border: 1px solid #E2E8F0;
+        border-radius: 10px; padding: 14px 16px; cursor: pointer; transition: all 0.15s ease;
+    }}
+    .podium-card:hover {{ border-color: #94A3B8; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }}
+    .podium-card.highlight {{ border-color: #2563EB; background: #EFF6FF; }}
+    .podium-title {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }}
+    .podium-query .podium-title {{ color: #1E40AF; }}
+    .podium-process .podium-title {{ color: #92400E; }}
+    .podium-ram .podium-title {{ color: #3730A3; }}
+    .podium-best .podium-title {{ color: #166534; }}
+    .podium-id {{ font-family: 'SF Mono', 'Fira Code', monospace; font-size: 20px; font-weight: 700; color: #0F172A; }}
+    .podium-detail {{ font-size: 12px; color: #64748B; margin-top: 2px; font-family: 'SF Mono', 'Fira Code', monospace; }}
+    .podium-dims {{ display: flex; gap: 3px; flex-wrap: wrap; margin-top: 8px; }}
+    .podium-dim {{ padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 500; background: #E2E8F0; color: #475569; }}
+    .table-scroll {{ overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th {{
+        background: #F8FAFC; border-bottom: 2px solid #E2E8F0; padding: 10px 12px;
+        text-align: left; font-weight: 600; color: #475569; font-size: 11px;
+        text-transform: uppercase; letter-spacing: 0.03em; position: sticky; top: 0; z-index: 2;
+    }}
+    th.sortable {{ cursor: pointer; user-select: none; }}
+    th.sortable:hover {{ color: #0F172A; }}
+    th.sorted {{ color: #0F172A; }}
+    th .sort-arrow {{ font-size: 10px; margin-left: 3px; }}
+    td {{ padding: 8px 12px; border-bottom: 1px solid #F1F5F9; }}
+    .num {{ font-family: 'SF Mono', 'Fira Code', monospace; text-align: right; }}
+    tr.data-row {{ cursor: pointer; transition: background 0.1s ease; }}
+    tr.data-row:hover {{ background: #F8FAFC; }}
+    tr.row-original {{ background: #EFF6FF; }}
+    tr.row-original:hover {{ background: #DBEAFE; }}
+    tr.row-best {{ background: #F0FDF4; }}
+    tr.row-best:hover {{ background: #DCFCE7; }}
+    tr.row-highlight {{ outline: 2px solid #2563EB; outline-offset: -2px; }}
+    .expand-icon {{
+        display: inline-block; width: 18px; height: 18px; line-height: 18px;
+        text-align: center; border-radius: 4px; background: #F1F5F9;
+        color: #64748B; font-size: 12px; font-weight: 700;
+        transition: all 0.15s ease; flex-shrink: 0;
+    }}
+    tr.open .expand-icon {{ background: #0F172A; color: #fff; transform: rotate(90deg); }}
+    .badge {{
+        display: inline-block; padding: 2px 7px; border-radius: 5px;
+        font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+        white-space: nowrap; margin-right: 3px;
+    }}
+    .badge-original {{ background: #DBEAFE; color: #1E40AF; }}
+    .badge-best {{ background: #DCFCE7; color: #166534; }}
+    .badge-iteration {{ background: #F1F5F9; color: #475569; }}
+    .badge-rank {{ background: #FEF3C7; color: #92400E; }}
+    tr.detail-row {{ display: none; }}
+    tr.detail-row.visible {{ display: table-row; }}
+    tr.detail-row > td {{ padding: 0; border-bottom: 2px solid #E2E8F0; background: #FAFBFC; }}
+    .detail-panel {{ padding: 16px 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }}
+    @media (max-width: 900px) {{ .detail-panel {{ grid-template-columns: 1fr; }} }}
+    .detail-block h4 {{
+        font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase;
+        letter-spacing: 0.06em; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #E2E8F0;
+    }}
+    .mini-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+    .mini-table th {{ position: static; background: transparent; border-bottom: 1px solid #E2E8F0; padding: 4px 6px; font-size: 10px; color: #94A3B8; }}
+    .mini-table td {{ padding: 4px 6px; border-bottom: 1px solid #F1F5F9; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }}
+    .mini-table td.label-cell {{ font-family: 'Inter', sans-serif; color: #475569; font-weight: 500; }}
+    .dim-flow {{ display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }}
+    .dim-flow .df-chip {{ padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 500; background: #F1F5F9; color: #475569; }}
+    .dim-flow .df-chip.up {{ background: #DBEAFE; color: #1E40AF; }}
+    .dim-flow .df-chip.down {{ background: #FEF3C7; color: #92400E; }}
+    .dim-flow .df-arrow {{ color: #CBD5E1; font-size: 10px; }}
+    .stat-row {{ display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }}
+    .stat-row .stat-label {{ color: #64748B; }}
+    .stat-row .stat-val {{ font-family: 'SF Mono', 'Fira Code', monospace; font-weight: 600; }}
+    .dim-up-text {{ color: #1E40AF; }}
+    .dim-down-text {{ color: #92400E; }}
 </style>
 </head>
 <body>
@@ -548,10 +561,6 @@ class OptimusResult:
     </div>
 
     <div class="cards">
-        <div class="card">
-            <div class="card-label">Cube</div>
-            <div class="card-value" style="font-size:18px">{self.cube_name}</div>
-        </div>
         <div class="card">
             <div class="card-label">Orders Tested</div>
             <div class="card-value">{orders_tested}</div>
@@ -592,24 +601,24 @@ class OptimusResult:
 
     <div class="panel">
         <h2>All Permutation Results</h2>
+        <div class="podium" id="podium"></div>
         <div class="table-scroll">
             <table>
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>Mode</th>
-                        <th>Query Time (s)</th>
-                        <th>Query Ratio</th>
+                        <th style="width:30px"></th>
+                        <th class="sortable" data-sort="id" style="width:40px">ID <span class="sort-arrow">&#9650;</span></th>
+                        <th style="width:100px">Mode</th>
+                        <th class="sortable" data-sort="qt">Query Time <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="qtRatio">Query Ratio <span class="sort-arrow"></span></th>
                         {process_header}
-                        <th>RAM (GB)</th>
-                        <th>RAM Reduction</th>
-                        <th>Reorder (s)</th>
-                        {dim_headers}
+                        <th class="sortable" data-sort="ramGB">RAM <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="ramReduction">Reduction <span class="sort-arrow"></span></th>
+                        <th>Reorder</th>
+                        <th>Dimensions</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {table_rows_html}
-                </tbody>
+                <tbody id="tbody"></tbody>
             </table>
         </div>
     </div>
@@ -676,6 +685,194 @@ new Chart(document.getElementById('scatterChart'), {{
         }}
     }}
 }});
+</script>
+
+<script>
+const includeProcess = {include_process_js};
+const totalCols = {total_cols};
+const originalOrder = {json.dumps(list(original.dimension_order))};
+const perms = {json.dumps(perms_data)};
+
+const iterations = perms.filter(p => p.mode !== 'Original Order');
+const bestQuery = iterations.length ? [...iterations].sort((a,b) => a.qt - b.qt)[0] : null;
+const bestProcess = includeProcess && iterations.length ? [...iterations].sort((a,b) => a.pt - b.pt)[0] : null;
+const bestRam = iterations.length ? [...iterations].sort((a,b) => a.ramGB - b.ramGB)[0] : null;
+const bestOverall = perms.find(p => p.isBest);
+
+iterations.forEach(p => {{
+    p.queryRank = [...iterations].sort((a,b) => a.qt - b.qt).findIndex(x => x.id === p.id) + 1;
+    if (includeProcess) p.processRank = [...iterations].sort((a,b) => a.pt - b.pt).findIndex(x => x.id === p.id) + 1;
+}});
+
+function shortDims(dims) {{ return dims.map(d => `<span class="podium-dim">${{d}}</span>`).join(''); }}
+function formatPct(v) {{ return (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%'; }}
+function pctClass(v) {{ return v > 0 ? 'positive' : v < 0 ? 'negative' : ''; }}
+
+if (bestOverall) {{
+    let podiumHtml = `
+        <div class="podium-card podium-best" data-highlight="${{bestOverall.id}}">
+            <div class="podium-title">Best Overall</div>
+            <div class="podium-id">#${{bestOverall.id}}</div>
+            <div class="podium-detail">${{bestOverall.qt.toFixed(4)}}s${{includeProcess ? ' &middot; ' + bestOverall.pt.toFixed(2) + 's' : ''}} &middot; ${{(bestOverall.ramGB * 1024).toFixed(1)}}MB</div>
+            <div class="podium-dims">${{shortDims(bestOverall.dims)}}</div>
+        </div>
+        <div class="podium-card podium-query" data-highlight="${{bestQuery.id}}">
+            <div class="podium-title">#1 Fastest Query</div>
+            <div class="podium-id">#${{bestQuery.id}}</div>
+            <div class="podium-detail">${{bestQuery.qt.toFixed(5)}}s (${{formatPct(bestQuery.qtRatio)}})</div>
+            <div class="podium-dims">${{shortDims(bestQuery.dims)}}</div>
+        </div>`;
+    if (includeProcess && bestProcess) {{
+        podiumHtml += `
+        <div class="podium-card podium-process" data-highlight="${{bestProcess.id}}">
+            <div class="podium-title">#1 Fastest Process</div>
+            <div class="podium-id">#${{bestProcess.id}}</div>
+            <div class="podium-detail">${{bestProcess.pt.toFixed(3)}}s (${{formatPct(bestProcess.ptRatio)}})</div>
+            <div class="podium-dims">${{shortDims(bestProcess.dims)}}</div>
+        </div>`;
+    }}
+    podiumHtml += `
+        <div class="podium-card podium-ram" data-highlight="${{bestRam.id}}">
+            <div class="podium-title">#1 Lowest RAM</div>
+            <div class="podium-id">#${{bestRam.id}}</div>
+            <div class="podium-detail">${{(bestRam.ramGB * 1024).toFixed(2)}}MB (${{(bestRam.ramReduction * 100).toFixed(0)}}% reduction)</div>
+            <div class="podium-dims">${{shortDims(bestRam.dims)}}</div>
+        </div>`;
+    document.getElementById('podium').innerHTML = podiumHtml;
+}}
+
+document.querySelectorAll('.podium-card').forEach(card => {{
+    card.addEventListener('click', () => {{
+        document.querySelectorAll('.podium-card').forEach(c => c.classList.remove('highlight'));
+        card.classList.add('highlight');
+        document.querySelectorAll('tr.row-highlight').forEach(r => r.classList.remove('row-highlight'));
+        const row = document.querySelector(`tr[data-id="${{card.dataset.highlight}}"]`);
+        if (row) {{ row.classList.add('row-highlight'); row.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}
+    }});
+}});
+
+const tbody = document.getElementById('tbody');
+let sortCol = 'id', sortAsc = true;
+
+function renderTable() {{
+    const sorted = [...perms].sort((a, b) => {{
+        let va = a[sortCol], vb = b[sortCol];
+        if (sortCol === 'ramReduction') {{ va = -a.ramReduction; vb = -b.ramReduction; }}
+        return sortAsc ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
+    }});
+
+    tbody.innerHTML = sorted.map(p => {{
+        const isOriginal = p.mode === 'Original Order';
+        const isBest = p.isBest;
+        const rowClass = isBest ? 'row-best' : isOriginal ? 'row-original' : '';
+        const modeBadge = isBest ? '<span class="badge badge-best">Best</span>'
+            : isOriginal ? '<span class="badge badge-original">Original</span>'
+            : '<span class="badge badge-iteration">Iteration</span>';
+        let rankBadges = '';
+        if (!isOriginal) {{
+            if (bestQuery && p.id === bestQuery.id) rankBadges += '<span class="badge badge-rank">#1Q</span>';
+            if (includeProcess && bestProcess && p.id === bestProcess.id) rankBadges += '<span class="badge badge-rank">#1P</span>';
+        }}
+        const dimCompact = p.dims.join(' > ');
+
+        const dimFlow = p.dims.map((d, i) => {{
+            const origIdx = originalOrder.indexOf(d);
+            const cls = i < origIdx ? 'up' : i > origIdx ? 'down' : '';
+            return `<span class="df-chip ${{cls}}">${{d}}</span>`;
+        }}).join('<span class="df-arrow">&#9654;</span>');
+
+        const dimTable = p.dims.map((d, i) => {{
+            const oi = originalOrder.indexOf(d);
+            const diff = oi - i;
+            const mv = diff > 0 ? `<span class="dim-up-text">&uarr;${{diff}}</span>` : diff < 0 ? `<span class="dim-down-text">&darr;${{Math.abs(diff)}}</span>` : '&mdash;';
+            return `<tr><td>${{i + 1}}</td><td class="label-cell">${{d}}</td><td>${{oi + 1}}</td><td>${{mv}}</td></tr>`;
+        }}).join('');
+
+        let processCells = '';
+        let processStats = '';
+        if (includeProcess) {{
+            processCells = `
+                <td class="num">${{p.pt.toFixed(3)}}</td>
+                <td class="num ${{pctClass(p.ptRatio)}}">${{formatPct(p.ptRatio)}}</td>`;
+            processStats = `
+                <div class="stat-row"><span class="stat-label">Process Time</span><span class="stat-val">${{p.pt.toFixed(3)}}s</span></div>
+                <div class="stat-row"><span class="stat-label">vs Original</span><span class="stat-val ${{pctClass(p.ptRatio)}}">${{formatPct(p.ptRatio)}}</span></div>`;
+        }}
+
+        let rankStats = '';
+        if (!isOriginal && p.queryRank) {{
+            rankStats += `<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0"><span class="stat-label">Query Rank</span><span class="stat-val">#${{p.queryRank}} of ${{iterations.length}}</span></div>`;
+            if (includeProcess && p.processRank) {{
+                rankStats += `<div class="stat-row"><span class="stat-label">Process Rank</span><span class="stat-val">#${{p.processRank}} of ${{iterations.length}}</span></div>`;
+            }}
+        }}
+
+        return `
+        <tr class="data-row ${{rowClass}}" data-id="${{p.id}}" onclick="toggleDetail(this)">
+            <td><span class="expand-icon">&#9654;</span></td>
+            <td class="num">${{p.id}}</td>
+            <td>${{modeBadge}} ${{rankBadges}}</td>
+            <td class="num">${{p.qt.toFixed(5)}}</td>
+            <td class="num ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</td>
+            ${{processCells}}
+            <td class="num">${{(p.ramGB * 1024).toFixed(2)}} MB</td>
+            <td class="num ${{p.ramReduction > 0 ? 'negative' : ''}}">${{(p.ramReduction * 100).toFixed(0)}}%</td>
+            <td class="num">${{p.reorderDur.toFixed(3)}}s</td>
+            <td style="font-size:11px;color:#64748B;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${{dimCompact}}">${{dimCompact}}</td>
+        </tr>
+        <tr class="detail-row">
+            <td colspan="${{totalCols}}">
+                <div class="detail-panel">
+                    <div class="detail-block">
+                        <h4>Dimension Order</h4>
+                        <div class="dim-flow">${{dimFlow}}</div>
+                        <table class="mini-table" style="margin-top:10px">
+                            <thead><tr><th>Pos</th><th>Dimension</th><th>Orig</th><th>Moved</th></tr></thead>
+                            <tbody>${{dimTable}}</tbody>
+                        </table>
+                    </div>
+                    <div class="detail-block">
+                        <h4>Performance Summary</h4>
+                        <div class="stat-row"><span class="stat-label">Query Time</span><span class="stat-val">${{p.qt.toFixed(5)}}s</span></div>
+                        <div class="stat-row"><span class="stat-label">vs Original</span><span class="stat-val ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</span></div>
+                        ${{processStats}}
+                        <div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0"><span class="stat-label">RAM Usage</span><span class="stat-val">${{(p.ramGB * 1024).toFixed(2)}} MB</span></div>
+                        <div class="stat-row"><span class="stat-label">RAM Reduction</span><span class="stat-val ${{p.ramReduction > 0 ? 'negative' : ''}}">${{(p.ramReduction * 100).toFixed(0)}}%</span></div>
+                        ${{rankStats}}
+                    </div>
+                    <div class="detail-block">
+                        <h4>Reorder Info</h4>
+                        <div class="stat-row"><span class="stat-label">Reorder Duration</span><span class="stat-val">${{p.reorderDur.toFixed(3)}}s</span></div>
+                        <div class="stat-row"><span class="stat-label">RAM % Change</span><span class="stat-val">${{(p.ramReduction * 100).toFixed(0)}}%</span></div>
+                    </div>
+                </div>
+            </td>
+        </tr>`;
+    }}).join('');
+}}
+
+function toggleDetail(row) {{
+    row.classList.toggle('open');
+    const detail = row.nextElementSibling;
+    if (detail && detail.classList.contains('detail-row')) detail.classList.toggle('visible');
+}}
+
+document.querySelectorAll('th.sortable').forEach(th => {{
+    th.addEventListener('click', () => {{
+        const col = th.dataset.sort;
+        if (sortCol === col) sortAsc = !sortAsc;
+        else {{ sortCol = col; sortAsc = true; }}
+        document.querySelectorAll('th.sortable').forEach(t => {{
+            t.classList.remove('sorted');
+            t.querySelector('.sort-arrow').textContent = '';
+        }});
+        th.classList.add('sorted');
+        th.querySelector('.sort-arrow').textContent = sortAsc ? '\u25B2' : '\u25BC';
+        renderTable();
+    }});
+}});
+
+renderTable();
 </script>
 </body>
 </html>"""
