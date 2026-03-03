@@ -55,7 +55,22 @@ class ExecutionContext:
 
     @property
     def elapsed(self) -> float:
-        return time.time() - self.start_time
+        return time.time() - self.start_time + getattr(self, '_elapsed_offset', 0.0)
+
+    def to_checkpoint_dict(self) -> dict:
+        return {
+            "counter": self.counter,
+            "current_ram": self.current_ram,
+            "original_ram": self.original_ram,
+            "elapsed_offset": self.elapsed,
+        }
+
+    def restore_from_checkpoint(self, data: dict):
+        self.counter = data['counter']
+        self.current_ram = data['current_ram']
+        self.original_ram = data['original_ram']
+        self._elapsed_offset = data.get('elapsed_offset', 0.0)
+        self.start_time = time.time()
 
 
 class PermutationResult:
@@ -149,6 +164,29 @@ class PermutationResult:
     def to_csv_row(self, original_order_result: 'PermutationResult') -> str:
         row = [str(i) for i in self.to_row(original_order_result)]
         return SEPARATOR.join(row) + "\n"
+
+    @classmethod
+    def from_checkpoint(cls, data: dict) -> 'PermutationResult':
+        """Reconstruct from checkpoint without triggering ExecutionContext side effects."""
+        instance = object.__new__(cls)
+        instance.mode = ExecutionMode(data['mode'])
+        instance.cube_name = data['cube_name']
+        instance.view_names = data['view_names']
+        instance.process_names = data['process_names']
+        instance.dimension_order = data['dimension_order']
+        instance.query_times_by_view = {k: list(v) for k, v in data['query_times_by_view'].items()}
+        instance.process_times_by_process = (
+            {k: list(v) for k, v in data['process_times_by_process'].items()}
+            if data.get('process_times_by_process') else {}
+        )
+        instance.is_best = False
+        instance.include_process = bool(data['process_names'])
+        instance.ram_usage = data['ram_usage']
+        instance.ram_percentage_change = data['ram_percentage_change']
+        instance.ram_reduction = data['ram_reduction']
+        instance.reorder_duration = data['reorder_duration']
+        instance.permutation_id = data['permutation_id']
+        return instance
 
 
 class OptimusResult:

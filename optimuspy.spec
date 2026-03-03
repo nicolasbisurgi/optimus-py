@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import sys
 
-hiddenimports = ['seaborn', 'execution_mode', 'executors', 'results']
+hiddenimports = ['seaborn', 'execution_mode', 'executors', 'results', 'checkpoint']
 if sys.platform == 'win32':
     hiddenimports.append('win32timezone')
 
@@ -9,7 +9,7 @@ a = Analysis(
     ['optimuspy.py'],
     pathex=[],
     binaries=[],
-    datas=[('execution_mode.py', '.'), ('executors.py', '.'), ('results.py', '.')],
+    datas=[('execution_mode.py', '.'), ('executors.py', '.'), ('results.py', '.'), ('checkpoint.py', '.')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

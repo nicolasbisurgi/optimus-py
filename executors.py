@@ -25,7 +25,8 @@ def swap_random(order: list) -> List[str]:
 class OptipyzerExecutor:
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  displayed_dimension_order: List[str],
-                 executions: int, measure_dimension_only_numeric: bool, context: ExecutionContext):
+                 executions: int, measure_dimension_only_numeric: bool, context: ExecutionContext,
+                 checkpoint_manager=None):
         self.tm1 = tm1
         self.cube_name = cube_name
         self.view_names = view_names
@@ -37,6 +38,16 @@ class OptipyzerExecutor:
         self.include_process = bool(process_names)
         self.cube_dim_number = len(self.dimensions)
         self.context = context
+        self.checkpoint_manager = checkpoint_manager
+        self._initial_dimension_order = None
+        self._original_order_result = None
+        self._resumed_results = []
+
+    def set_resume_context(self, initial_dimension_order, original_order_result, resumed_results):
+        """Set checkpoint resume context. Must be called before execute() when resuming."""
+        self._initial_dimension_order = initial_dimension_order
+        self._original_order_result = original_order_result
+        self._resumed_results = resumed_results
 
     def _determine_query_permutation_result(self) -> Dict[str, List[float]]:
         query_times_by_view = {}
@@ -136,14 +147,30 @@ class OptipyzerExecutor:
         if not success:
             raise RuntimeError(f"Failed to clear cache for cube '{self.cube_name}'. Status: '{status}'")
 
+    def _save_checkpoint(self, new_results, last_applied_order, executor_state=None):
+        if not self.checkpoint_manager:
+            return
+        if not self._original_order_result or not self._initial_dimension_order:
+            logging.warning("Checkpoint skipped — resume context not set (call set_resume_context first)")
+            return
+        all_completed = self._resumed_results + new_results
+        self.checkpoint_manager.save(
+            executor_type=self.__class__.__name__,
+            execution_context=self.context,
+            initial_dimension_order=self._initial_dimension_order,
+            last_applied_order=last_applied_order,
+            original_order_result=self._original_order_result,
+            completed_results=all_completed,
+            executor_state=executor_state)
+
 
 class OriginalOrderExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int,
                  measure_dimension_only_numeric: bool, original_dimension_order: List[str],
-                 context: ExecutionContext):
+                 context: ExecutionContext, checkpoint_manager=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context)
+                         measure_dimension_only_numeric, context, checkpoint_manager)
         self.mode = ExecutionMode.ORIGINAL_ORDER
         self.original_dimension_order = original_dimension_order
 
@@ -160,9 +187,10 @@ class MainExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
                  context: ExecutionContext, fast: bool = False,
                  dimensions_to_exclude: List[str] = None,
-                 orders_to_ignore: List[List[str]] = None):
+                 orders_to_ignore: List[List[str]] = None,
+                 checkpoint_manager=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context)
+                         measure_dimension_only_numeric, context, checkpoint_manager)
         self.mode = ExecutionMode.ITERATIONS
         self.fast = fast
         self.dimensions_to_exclude = dimensions_to_exclude or []
@@ -173,26 +201,14 @@ class MainExecutor(OptipyzerExecutor):
     ) -> bool:
         # if a dimension has strings and target dimension is the last dimension in the cube - do not swap.
         # rest API allows to swap a dim with string to the last position, but not out of the last position
-        if self.tm1.hierarchies.exists(
-                dimension_name=dimension_name, hierarchy_name="Leaves"
-        ):
-            hierarchy_name = "Leaves"
-        else:
-            hierarchy_name = dimension_name
-
-        elements = self.tm1.elements.get_element_types(
-            dimension_name=dimension_name,
-            hierarchy_name=hierarchy_name,
-            skip_consolidations=True,
-        )
-        string_elements = [element for element, element_type in elements.items() if element_type != "Numeric"]
-        if string_elements:
-            logging.info(
-                f"Skip swapping dimension '{dimension_name}' into last position because it has string elements: {string_elements}")
         last_target_position = target_position + 1 == self.cube_dim_number
-        return string_elements and last_target_position
+        if last_target_position and self._has_string_elements(dimension_name):
+            logging.info(
+                f"Skip swapping dimension '{dimension_name}' into last position because it has string elements")
+            return True
+        return False
 
-    def execute(self) -> List[PermutationResult]:
+    def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         dimensions = self.dimensions[:]
         resulting_order = self.dimensions[:]
         permutation_results = []
@@ -208,11 +224,24 @@ class MainExecutor(OptipyzerExecutor):
             dimensions.remove(self.dimensions[-1])
 
         if self.fast:
-            # for 5 dimensional cubes we evaluate 5 + 4 permutations
             total_permutations = len(dimension_pool) * 2 - 1
         else:
-            # for 5 dimensional cubes we evaluate 5 + 4 + 3 + 2 permutations
             total_permutations = sum(range(2, len(dimension_pool) + 1))
+
+        # Restore greedy algorithm state from checkpoint
+        resume_iteration = -1
+        resume_tested_dims = set()
+        resumed_result_ids = set()
+        executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "greedy_state" in executor_state:
+            gs = executor_state["greedy_state"]
+            resulting_order = gs["resulting_order"]
+            dimension_pool = gs["dimension_pool"]
+            resume_iteration = gs["iteration"]
+            dimensions = gs["dimensions"]
+            resume_tested_dims = set(gs.get("tested_dims_in_current_round", []))
+            resumed_result_ids = set(gs.get("results_per_dimension_ids", []))
+            logging.info(f"Resuming greedy algorithm from iteration {resume_iteration}")
 
         # iteration through positions like: n, 0, n-1, 1, n-2, 2, ...
         for iteration, target_position in enumerate(
@@ -223,10 +252,24 @@ class MainExecutor(OptipyzerExecutor):
             if target_position == mid:
                 break
 
+            # Skip fully completed iterations
+            if iteration < resume_iteration:
+                continue
+
             results_per_dimension = list()
+
+            # Rebuild results_per_dimension from resumed results for current iteration
+            if iteration == resume_iteration and self._resumed_results:
+                results_per_dimension = [
+                    r for r in self._resumed_results if r.permutation_id in resumed_result_ids
+                ]
 
             # for the current position - swap all the allowed dimensions and append all possible orders to the result set
             for dimension in dimension_pool:
+                # Skip dimensions already tested in this round (from checkpoint)
+                if iteration == resume_iteration and dimension in resume_tested_dims:
+                    continue
+
                 original_position = resulting_order.index(dimension)
                 dimension_target = resulting_order[target_position]
 
@@ -244,14 +287,36 @@ class MainExecutor(OptipyzerExecutor):
                     permutation_results.append(permutation_result)
                     results_per_dimension.append(permutation_result)
 
+                    # Save checkpoint after each permutation
+                    self._save_checkpoint(
+                        new_results=permutation_results,
+                        last_applied_order=list(permutation),
+                        executor_state={
+                            "greedy_state": {
+                                "resulting_order": list(resulting_order),
+                                "dimension_pool": list(dimension_pool),
+                                "iteration": iteration,
+                                "dimensions": list(dimensions),
+                                "tested_dims_in_current_round": [
+                                    d for d in dimension_pool
+                                    if d == dimension or (iteration == resume_iteration and d in resume_tested_dims)
+                                    or dimension_pool.index(d) < dimension_pool.index(dimension)
+                                ],
+                                "results_per_dimension_ids": [r.permutation_id for r in results_per_dimension],
+                            }
+                        })
+
+            # Clear resume state after first resumed iteration completes
+            if iteration == resume_iteration:
+                resume_tested_dims = set()
+                resumed_result_ids = set()
+
             # only check for best results if any valid dim swaps are returned
             if len(results_per_dimension) > 0:
-                # for the current position - if position is higher than the mid-point - sort by ram use
                 if target_position > mid:
                     best_order = sorted(
                         results_per_dimension,
                         key=lambda r: r.ram_usage)[0]
-                # for the current position - if position is lower than the mid-point - sort by composite query time
                 else:
                     best_order = sorted(
                         results_per_dimension,
@@ -267,18 +332,38 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int,
                  measure_dimension_only_numeric: bool, predefined_orders: List[List[str]],
-                 context: ExecutionContext):
+                 context: ExecutionContext, checkpoint_manager=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context)
+                         measure_dimension_only_numeric, context, checkpoint_manager)
         self.mode = ExecutionMode.ITERATIONS
         self.predefined_orders = predefined_orders
 
-    def execute(self) -> List[PermutationResult]:
+    def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         total = len(self.predefined_orders)
         results = []
-        for order in self.predefined_orders:
+
+        completed_indices = set()
+        executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "predefined_state" in executor_state:
+            completed_indices = set(executor_state["predefined_state"]["completed_indices"])
+            logging.info(f"Resuming predefined orders: {len(completed_indices)}/{total} already completed")
+
+        for idx, order in enumerate(self.predefined_orders):
+            if idx in completed_indices:
+                continue
+
             result = self._evaluate_permutation(order, total_permutations=total)
             results.append(result)
+
+            # Save checkpoint after each permutation
+            completed_indices.add(idx)
+            self._save_checkpoint(
+                new_results=results,
+                last_applied_order=list(order),
+                executor_state={
+                    "predefined_state": {"completed_indices": sorted(completed_indices)}
+                })
+
         return results
 
 
@@ -288,17 +373,23 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
                  target_position: int, context: ExecutionContext,
-                 dimensions_to_exclude: List[str] = None):
+                 dimensions_to_exclude: List[str] = None, checkpoint_manager=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context)
+                         measure_dimension_only_numeric, context, checkpoint_manager)
         self.mode = ExecutionMode.ITERATIONS
         self.target_position = target_position
         self.dimensions_to_exclude = dimensions_to_exclude or []
 
-    def execute(self) -> List[PermutationResult]:
+    def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         current_order = self.dimensions[:]
         is_last = (self.target_position == len(current_order) - 1)
         results = []
+
+        completed_dimensions = set()
+        executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "position_state" in executor_state:
+            completed_dimensions = set(executor_state["position_state"]["completed_dimensions"])
+            logging.info(f"Resuming position optimizer: {len(completed_dimensions)} dimensions already tested")
 
         candidates = [
             dim for dim in current_order
@@ -307,6 +398,9 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
 
         total = len(candidates)
         for dim in candidates:
+            if dim in completed_dimensions:
+                continue
+
             if is_last and self._has_string_elements(dim):
                 logging.info(f"Skip '{dim}' — has string elements, can't be last")
                 total -= 1
@@ -317,6 +411,15 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
             result = self._evaluate_permutation(permutation, total_permutations=total)
             results.append(result)
 
+            # Save checkpoint after each permutation
+            completed_dimensions.add(dim)
+            self._save_checkpoint(
+                new_results=results,
+                last_applied_order=list(permutation),
+                executor_state={
+                    "position_state": {"completed_dimensions": sorted(completed_dimensions)}
+                })
+
         return results
 
 
@@ -325,22 +428,30 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
 
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
-                 target_dimension: str, context: ExecutionContext):
+                 target_dimension: str, context: ExecutionContext, checkpoint_manager=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context)
+                         measure_dimension_only_numeric, context, checkpoint_manager)
         self.mode = ExecutionMode.ITERATIONS
         self.target_dimension = target_dimension
 
-    def execute(self) -> List[PermutationResult]:
+    def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         current_order = self.dimensions[:]
         current_idx = current_order.index(self.target_dimension)
         has_strings = self._has_string_elements(self.target_dimension)
         last_pos = len(current_order) - 1
         results = []
 
+        completed_positions = set()
+        executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "dimension_state" in executor_state:
+            completed_positions = set(executor_state["dimension_state"]["completed_positions"])
+            logging.info(f"Resuming dimension optimizer: {len(completed_positions)} positions already tested")
+
         total = last_pos if not has_strings else last_pos - 1
         for target_pos in range(len(current_order)):
             if target_pos == current_idx:
+                continue
+            if target_pos in completed_positions:
                 continue
             if target_pos == last_pos and has_strings:
                 logging.info(f"Skip last position — '{self.target_dimension}' has string elements")
@@ -349,5 +460,14 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
             permutation = swap(current_order, target_pos, current_idx)
             result = self._evaluate_permutation(permutation, total_permutations=total)
             results.append(result)
+
+            # Save checkpoint after each permutation
+            completed_positions.add(target_pos)
+            self._save_checkpoint(
+                new_results=results,
+                last_applied_order=list(permutation),
+                executor_state={
+                    "dimension_state": {"completed_positions": sorted(completed_positions)}
+                })
 
         return results
