@@ -16,11 +16,12 @@ class CheckpointManager:
     """Manages checkpoint files for resuming interrupted optimization runs."""
 
     def __init__(self, cube_name: str, instance: str, config_fingerprint: str,
-                 result_path: Union[str, Path] = Path("results/")):
+                 result_path: Union[str, Path] = Path("results/"), tm1=None):
         self.cube_name = cube_name
         self.instance = instance
         self.config_fingerprint = config_fingerprint
         self.result_path = Path(result_path)
+        self.tm1 = tm1  # When set, use TM1 blob storage instead of local files
         self._created_at = None
 
     @staticmethod
@@ -32,10 +33,19 @@ class CheckpointManager:
     def checkpoint_path(self) -> Path:
         return self.result_path / f"checkpoint_{self.cube_name}.json"
 
+    @property
+    def blob_name(self) -> str:
+        return f"optimuspy_checkpoint_{self.cube_name}.json"
+
     def exists(self) -> bool:
+        if self.tm1:
+            return self.tm1.files.exists(self.blob_name)
         return self.checkpoint_path.exists()
 
     def load(self) -> dict:
+        if self.tm1:
+            content = self.tm1.files.get(self.blob_name)
+            return json.loads(content.decode("utf-8"))
         with open(self.checkpoint_path, "r") as f:
             return json.load(f)
 
@@ -103,17 +113,26 @@ class CheckpointManager:
         if executor_state:
             data["executor_state"] = executor_state
 
-        # Atomic write: write to temp file, then rename
-        os.makedirs(self.result_path, exist_ok=True)
-        tmp_path = self.checkpoint_path.with_suffix(".tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2)
-        tmp_path.rename(self.checkpoint_path)
+        if self.tm1:
+            content = json.dumps(data, indent=2).encode("utf-8")
+            self.tm1.files.update_or_create(self.blob_name, content)
+        else:
+            # Atomic write: write to temp file, then rename
+            os.makedirs(self.result_path, exist_ok=True)
+            tmp_path = self.checkpoint_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp_path.rename(self.checkpoint_path)
 
     def remove(self):
-        if self.checkpoint_path.exists():
-            self.checkpoint_path.unlink()
-            logging.info(f"Checkpoint removed: {self.checkpoint_path}")
+        if self.tm1:
+            if self.tm1.files.exists(self.blob_name):
+                self.tm1.files.delete(self.blob_name)
+                logging.info(f"Checkpoint blob removed: {self.blob_name}")
+        else:
+            if self.checkpoint_path.exists():
+                self.checkpoint_path.unlink()
+                logging.info(f"Checkpoint removed: {self.checkpoint_path}")
 
     @staticmethod
     def serialize_result(result: PermutationResult) -> dict:

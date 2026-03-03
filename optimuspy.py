@@ -180,7 +180,7 @@ def retrieve_ram_usage(tm1: TM1Service, cube_name: str) -> float:
 
 
 def main(mode: str, cube_config: dict, config_ini_path: str, password: str = None,
-         no_resume: bool = False) -> bool:
+         no_resume: bool = False, tm1_checkpoint: bool = False) -> bool:
     instance_name = cube_config['instance']
     cube_name = cube_config['cube']
     view_names = cube_config['views']
@@ -232,7 +232,7 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
             tm1, cube_name, instance_name, view_names, process_names, executions,
             output, update, fast, dimensions_to_exclude, predefined_orders,
             orders_to_ignore, optimize_position, optimize_dimension,
-            initial_dimension_order, cube_config, no_resume)
+            initial_dimension_order, cube_config, no_resume, tm1_checkpoint)
 
 
 def _deduplicate_results(*result_lists):
@@ -284,7 +284,8 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                            orders_to_ignore: List[List[str]], optimize_position=None,
                            optimize_dimension: str = None,
                            initial_dimension_order: List[str] = None,
-                           cube_config: dict = None, no_resume: bool = False) -> bool:
+                           cube_config: dict = None, no_resume: bool = False,
+                           tm1_checkpoint: bool = False) -> bool:
     original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
     activate_performance_monitor(tm1)
 
@@ -300,7 +301,9 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
 
     # Checkpoint setup
     config_fingerprint = CheckpointManager.compute_config_fingerprint(cube_config) if cube_config else ""
-    checkpoint_mgr = CheckpointManager(cube_name, instance_name, config_fingerprint, RESULT_PATH)
+    checkpoint_mgr = CheckpointManager(
+        cube_name, instance_name, config_fingerprint, RESULT_PATH,
+        tm1=tm1 if tm1_checkpoint else None)
 
     # Try to resume from checkpoint
     resumed_results = []
@@ -452,93 +455,115 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
     return True
 
 
-def _execute_scan_mode(tm1: TM1Service, instance_name: str, min_dims: int,
+def _execute_scan_mode(tm1: TM1Service, instance_name: str, ram_threshold_pct: int = 60,
                        output_dir: str = None) -> bool:
     logging.info(f"Scanning instance '{instance_name}' for optimization candidates...")
 
-    # Get all non-control cubes
-    all_cubes = tm1.cubes.get_all_names(skip_control_cubes=True)
-    logging.info(f"Found {len(all_cubes)} non-control cubes")
-
-    # Build dimension info and filter by dimension count + optimization status
-    candidates = []
-    for cube_name in all_cubes:
-        visible_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
-        dim_count = len(visible_order)
-
-        if dim_count < min_dims:
-            continue
-
-        storage_order = tm1.cubes.get_storage_dimension_order(cube_name=cube_name)
-
-        # Keep only cubes where storage == visible (not yet optimized)
-        if list(visible_order) != list(storage_order):
-            continue
-
-        candidates.append({
-            "cube_name": cube_name,
-            "dimension_order": list(visible_order),
-            "dim_count": dim_count,
-        })
-
-    if not candidates:
-        logging.info(f"No candidate cubes found (min dimensions: {min_dims}, not yet optimized)")
-        return True
-
-    # Get RAM usage via performance monitor
-    ram_by_cube = {}
     original_perf_state = None
     try:
         original_perf_state = retrieve_performance_monitor_state(tm1)
         activate_performance_monitor(tm1)
 
+        # Single MDX: get RAM for all non-control cubes (includes 'Cubes Total' row)
         mdx = """
         SELECT
-          NON EMPTY {[}StatsStatsByCube].[Total Memory Used]} ON COLUMNS,
-          NON EMPTY {[}PerfCubes].[}PerfCubes].Members} ON ROWS
+          NON EMPTY {[}StatsStatsByCube].[}StatsStatsByCube].[Total Memory Used]} ON COLUMNS,
+          NON EMPTY EXCEPT(
+            {TM1SUBSETALL([}PerfCubes].[}PerfCubes])},
+            {TM1FILTERBYPATTERN({TM1SUBSETALL([}PerfCubes].[}PerfCubes])}, "}*")}
+          ) ON ROWS
         FROM [}StatsByCube]
-        WHERE ([}TimeIntervals].[LATEST])
+        WHERE ([}TimeIntervals].[}TimeIntervals].[LATEST])
         """
         df = tm1.cells.execute_mdx_dataframe(mdx)
+
+        ram_by_cube = {}
+        total_model_ram = 0.0
         for _, row in df.iterrows():
-            cube = row.iloc[0]  # First column is the cube name from }PerfCubes
-            ram_value = row.iloc[1]  # Second column is Total Memory Used
-            ram_by_cube[str(cube)] = float(ram_value) if ram_value else 0.0
+            cube = str(row.iloc[0])
+            ram_value = float(row.iloc[1]) if row.iloc[1] else 0.0
+            if cube == "Cubes Total":
+                total_model_ram = ram_value
+            else:
+                ram_by_cube[cube] = ram_value
+
+        if total_model_ram <= 0:
+            logging.error("Could not determine total model RAM from 'Cubes Total'")
+            return False
+
+        logging.info(f"Total model RAM: {total_model_ram / (1024 ** 3):.2f} GB across "
+                     f"{len(ram_by_cube)} non-control cubes")
+
+        # Sort by RAM descending and take cubes that account for up to threshold % of total
+        sorted_cubes = sorted(ram_by_cube.items(), key=lambda x: x[1], reverse=True)
+        ram_target = total_model_ram * (ram_threshold_pct / 100)
+        cumulative_ram = 0.0
+        top_cubes = []
+        for cube_name, ram_bytes in sorted_cubes:
+            if cumulative_ram >= ram_target:
+                break
+            top_cubes.append((cube_name, ram_bytes))
+            cumulative_ram += ram_bytes
+
+        logging.info(f"Selected {len(top_cubes)} cubes accounting for up to "
+                     f"{ram_threshold_pct}% of model RAM")
+
+        # Filter out already-optimized cubes (visible order != storage order)
+        candidates = []
+        for cube_name, ram_bytes in top_cubes:
+            visible_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
+            storage_order = tm1.cubes.get_storage_dimension_order(cube_name=cube_name)
+
+            if list(visible_order) != list(storage_order):
+                logging.info(f"Skipping '{cube_name}' — already optimized")
+                continue
+
+            candidates.append({
+                "cube_name": cube_name,
+                "dimension_order": list(visible_order),
+                "dim_count": len(visible_order),
+                "ram_bytes": ram_bytes,
+                "ram_gb": ram_bytes / (1024 ** 3),
+                "pct_of_total": (ram_bytes / total_model_ram) * 100,
+            })
 
     except Exception as e:
-        logging.warning(f"Could not retrieve RAM usage from performance monitor: {e}")
+        logging.error(f"Scan failed: {e}", exc_info=True)
+        return False
     finally:
         with suppress(Exception):
             if original_perf_state is not None and not original_perf_state:
                 deactivate_performance_monitor(tm1)
 
-    # Attach RAM to candidates and sort by RAM descending
-    for c in candidates:
-        c["ram_bytes"] = ram_by_cube.get(c["cube_name"], 0.0)
-        c["ram_gb"] = c["ram_bytes"] / (1024 ** 3)
-
-    candidates.sort(key=lambda c: c["ram_bytes"], reverse=True)
+    if not candidates:
+        logging.info("No candidate cubes found (all top cubes already optimized)")
+        return True
 
     # Print table
-    total_ram = sum(c["ram_gb"] for c in candidates)
-    print(f"\nFound {len(candidates)} candidate cubes "
-          f"(min dimensions: {min_dims}, not yet optimized):\n")
+    total_ram_gb = total_model_ram / (1024 ** 3)
+    candidate_ram = sum(c["ram_gb"] for c in candidates)
+    candidate_pct = sum(c["pct_of_total"] for c in candidates)
 
-    # Calculate column widths
+    print(f"\nCubes accounting for up to {ram_threshold_pct}% of total model RAM "
+          f"({total_ram_gb:.2f} GB), not yet optimized:\n")
+
     max_name = max(len(c["cube_name"]) for c in candidates)
-    max_name = max(max_name, 9)  # "Cube Name" header
+    max_name = max(max_name, 9)
 
-    header = f"  {'#':>3}  {'Cube Name':<{max_name}}  {'Dims':>4}  {'RAM (GB)':>9}  Dimension Order"
+    header = (f"  {'#':>3}  {'Cube Name':<{max_name}}  {'Dims':>4}  "
+              f"{'RAM (GB)':>9}  {'% of Total':>10}  Dimension Order")
     print(header)
-    print(f"  {'─' * 3}  {'─' * max_name}  {'─' * 4}  {'─' * 9}  {'─' * 30}")
+    print(f"  {'─' * 3}  {'─' * max_name}  {'─' * 4}  {'─' * 9}  {'─' * 10}  {'─' * 30}")
 
     for i, c in enumerate(candidates, 1):
         dims_str = str(c["dimension_order"])
-        if len(dims_str) > 60:
-            dims_str = dims_str[:57] + "..."
-        print(f"  {i:>3}  {c['cube_name']:<{max_name}}  {c['dim_count']:>4}  {c['ram_gb']:>9.2f}  {dims_str}")
+        if len(dims_str) > 50:
+            dims_str = dims_str[:47] + "..."
+        print(f"  {i:>3}  {c['cube_name']:<{max_name}}  {c['dim_count']:>4}  "
+              f"{c['ram_gb']:>9.2f}  {c['pct_of_total']:>9.1f}%  {dims_str}")
 
-    print(f"\n  Total: {len(candidates)} cubes, {total_ram:.2f} GB combined RAM\n")
+    print(f"\n  Total: {len(candidates)} cubes, {candidate_ram:.2f} GB "
+          f"({candidate_pct:.1f}% of model RAM)\n")
 
     # Generate JSON configs if output directory specified
     if output_dir:
@@ -578,10 +603,14 @@ if __name__ == "__main__":
                         help="TM1 password (overrides config.ini)")
     parser.add_argument('--no-resume', dest='no_resume', action='store_true', default=False,
                         help="Ignore existing checkpoint and start fresh (optimize only)")
+    parser.add_argument('--tm1-checkpoint', dest='tm1_checkpoint', action='store_true', default=False,
+                        help="Store checkpoint as TM1 blob instead of local file "
+                             "(for stateless environments like Atmosphere)")
     parser.add_argument('--instance', dest='instance', default=None,
                         help="TM1 instance name from config.ini (scan only)")
-    parser.add_argument('--min-dims', dest='min_dims', type=int, default=4,
-                        help="Minimum number of dimensions to consider (scan only, default: 4)")
+    parser.add_argument('--ram-percent', dest='ram_percent', type=int, default=60,
+                        help="RAM threshold percentage — include cubes accounting for up to this %% "
+                             "of total model RAM (scan only, default: 60)")
     parser.add_argument('--output', dest='output_dir', default=None,
                         help="Output directory for generated JSON config files (scan only)")
 
@@ -602,7 +631,7 @@ if __name__ == "__main__":
 
         with TM1Service(**tm1_args) as tm1:
             success = _execute_scan_mode(
-                tm1, cmd_args.instance, cmd_args.min_dims, cmd_args.output_dir)
+                tm1, cmd_args.instance, cmd_args.ram_percent, cmd_args.output_dir)
     else:
         if not cmd_args.cube_config:
             parser.error(f"'{cmd_args.mode}' mode requires a cube config file")
@@ -617,7 +646,8 @@ if __name__ == "__main__":
             cube_config=cube_config,
             config_ini_path=cmd_args.config_ini,
             password=cmd_args.password,
-            no_resume=cmd_args.no_resume)
+            no_resume=cmd_args.no_resume,
+            tm1_checkpoint=cmd_args.tm1_checkpoint)
 
     if success:
         logging.info("Finished successfully")
