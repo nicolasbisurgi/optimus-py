@@ -147,7 +147,7 @@ v2.0 separates concerns:
 ```bash
 optimuspy optimize config.json          # Benchmark and find best order
 optimuspy set config.json               # Apply an order directly
-optimuspy scan --instance tm1srv01      # Discover optimization candidates
+optimuspy scan --instance tm1srv01       # Discover optimization candidates
 ```
 
 ### JSON config example
@@ -189,34 +189,33 @@ optimuspy scan --instance tm1srv01      # Discover optimization candidates
 
 Before you can optimize, you need to know **which cubes to optimize**. In a model with hundreds of cubes, manually inspecting each one isn't practical.
 
-Scan mode audits an entire TM1 instance and produces a prioritized list of optimization candidates:
+Scan mode audits an entire TM1 instance and produces a prioritized list of optimization candidates based on RAM consumption:
 
 ```bash
 optimuspy scan --instance tm1srv01
-optimuspy scan --instance tm1srv01 --min-dims 5 --output configs/
+optimuspy scan --instance tm1srv01 --ram-percent 80 --output configs/
 ```
 
 The scan:
-1. Retrieves all non-control cubes from the instance
-2. Filters out cubes with fewer than N dimensions (default: 4, configurable via `--min-dims`)
-3. Queries the `}StatsByCube` cube for RAM usage
-4. Removes cubes that have already been optimized (where the internal storage order differs from the visible order)
-5. Sorts remaining cubes by RAM (largest first)
-6. Prints a summary table to the terminal
+1. Queries `}StatsByCube` for RAM usage across all non-control cubes (including the "Cubes Total" row for total model RAM)
+2. Sorts cubes by RAM descending and selects those that account for up to N% of total model RAM (default: 60%, configurable via `--ram-percent`)
+3. Removes cubes that have already been optimized (where the internal storage order differs from the visible order)
+4. Prints a summary table with each cube's share of total RAM
 
 ```
 Scanning instance 'tm1srv01' for optimization candidates...
 
-Found 12 candidate cubes (min dimensions: 4, not yet optimized):
+Cubes accounting for up to 60% of total model RAM (12.50 GB), not yet optimized:
 
-  #  Cube Name              Dims  RAM (GB)  Dimension Order
-  1  Sales                     7     12.34  [Time, Version, Product, Customer, ...]
-  2  PnL                       6      8.21  [Scenario, Year, Period, Account, ...]
-  3  Balance                   5      3.45  [Entity, Account, Period, Year, Version]
-  ...
+  #  Cube Name              Dims  RAM (GB)  % of Total  Dimension Order
+  1  Sales                     7      4.20     33.6%    [Time, Version, Product, ...]
+  2  PnL                       6      2.10     16.8%    [Scenario, Year, Period, ...]
+  3  Balance                   5      1.05      8.4%    [Entity, Account, Period, ...]
 
-Total: 12 cubes, 24.00 GB combined RAM
+  Total: 3 cubes, 7.35 GB (58.8% of model RAM)
 ```
+
+This approach targets the cubes where optimization will have the most impact — the handful of large cubes that dominate your model's memory footprint — rather than filtering by dimension count.
 
 With `--output`, it generates a ready-to-use JSON config file for each candidate cube, so you can start optimizing immediately.
 
@@ -240,6 +239,20 @@ optimuspy optimize config.json
 # Force a fresh start, ignoring any existing checkpoint
 optimuspy optimize config.json --no-resume
 ```
+
+### TM1 Blob Storage for Stateless Environments
+
+When running from **Atmosphere** (or any stateless environment like Lambda/ECR), local files don't persist across invocations. The `--tm1-checkpoint` flag stores the checkpoint as a TM1 blob via the FileService API instead of a local file:
+
+```bash
+# Checkpoint stored as TM1 blob (survives instance restarts)
+optimuspy optimize config.json --tm1-checkpoint
+
+# Force fresh start, deleting existing TM1 blob checkpoint
+optimuspy optimize config.json --tm1-checkpoint --no-resume
+```
+
+The blob is named `optimuspy_checkpoint_{cube}.json` and uses the same TM1 connection that OptimusPy already has open for benchmarking. The checkpoint format is identical — only the storage location changes.
 
 ---
 

@@ -478,17 +478,19 @@ def _execute_scan_mode(tm1: TM1Service, instance_name: str, ram_threshold_pct: i
         df = tm1.cells.execute_mdx_dataframe(mdx)
 
         ram_by_cube = {}
-        total_model_ram = 0.0
         for _, row in df.iterrows():
-            cube = str(row.iloc[0])
-            ram_value = float(row.iloc[1]) if row.iloc[1] else 0.0
+            cube = str(row["}PerfCubes"])
             if cube == "Cubes Total":
-                total_model_ram = ram_value
-            else:
-                ram_by_cube[cube] = ram_value
+                continue
+            try:
+                ram_value = float(row["Value"])
+            except (ValueError, TypeError):
+                continue
+            ram_by_cube[cube] = ram_value
 
+        total_model_ram = sum(ram_by_cube.values())
         if total_model_ram <= 0:
-            logging.error("Could not determine total model RAM from 'Cubes Total'")
+            logging.error("No RAM data found for non-control cubes")
             return False
 
         logging.info(f"Total model RAM: {total_model_ram / (1024 ** 3):.2f} GB across "

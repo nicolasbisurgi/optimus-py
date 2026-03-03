@@ -39,11 +39,14 @@ class CheckpointManager:
 
     def exists(self) -> bool:
         if self.tm1:
-            return self.tm1.files.exists(self.blob_name)
+            result = self.tm1.files.exists(self.blob_name)
+            logging.info(f"TM1 blob checkpoint exists check '{self.blob_name}': {result}")
+            return result
         return self.checkpoint_path.exists()
 
     def load(self) -> dict:
         if self.tm1:
+            logging.info(f"Loading checkpoint from TM1 blob '{self.blob_name}'")
             content = self.tm1.files.get(self.blob_name)
             return json.loads(content.decode("utf-8"))
         with open(self.checkpoint_path, "r") as f:
@@ -52,8 +55,8 @@ class CheckpointManager:
     def validate(self, initial_dimension_order: List[str]) -> bool:
         try:
             data = self.load()
-        except (json.JSONDecodeError, OSError) as e:
-            logging.warning(f"Checkpoint file corrupted or unreadable: {e}")
+        except Exception as e:
+            logging.warning(f"Checkpoint corrupted or unreadable: {e}")
             return False
 
         if data.get("version") != CHECKPOINT_VERSION:
@@ -115,7 +118,9 @@ class CheckpointManager:
 
         if self.tm1:
             content = json.dumps(data, indent=2).encode("utf-8")
+            logging.info(f"Saving checkpoint to TM1 blob '{self.blob_name}' ({len(content)} bytes)")
             self.tm1.files.update_or_create(self.blob_name, content)
+            logging.info(f"Checkpoint saved to TM1 blob '{self.blob_name}'")
         else:
             # Atomic write: write to temp file, then rename
             os.makedirs(self.result_path, exist_ok=True)
@@ -126,6 +131,7 @@ class CheckpointManager:
 
     def remove(self):
         if self.tm1:
+            logging.info(f"Checking TM1 blob '{self.blob_name}' for removal")
             if self.tm1.files.exists(self.blob_name):
                 self.tm1.files.delete(self.blob_name)
                 logging.info(f"Checkpoint blob removed: {self.blob_name}")
