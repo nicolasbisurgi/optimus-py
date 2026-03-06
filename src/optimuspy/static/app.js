@@ -1448,11 +1448,12 @@ const OptimusPy = (function () {
 
       if (!state.connected) {
         // Not connected — show prompt to select instance from sidebar
-        page.appendChild(el("div", { className: "empty-state", style: "padding-top:120px" },
+        page.appendChild(el("div", { className: "empty-state", style: "padding-top:80px" },
           el("div", { className: "empty-state-icon", html: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>' }),
           el("div", { className: "empty-state-title" }, "Select an instance to get started"),
           el("div", { className: "empty-state-text" }, "Use the instance switcher in the sidebar to connect to a TM1 server."),
         ));
+        page.appendChild(this._buildGuideContent());
         return;
       }
 
@@ -1482,6 +1483,9 @@ const OptimusPy = (function () {
 
       // Recent jobs
       this._loadRecentJobs(page);
+
+      // Guide & tips
+      page.appendChild(this._buildGuideContent());
     },
 
     _statCard(label, value, id) {
@@ -1523,6 +1527,108 @@ const OptimusPy = (function () {
         section.appendChild(card);
         page.appendChild(section);
       } catch { /* non-critical */ }
+    },
+
+    _buildGuideContent() {
+      const wrap = el("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px" });
+
+      // ---- How to Use OptimusPy ----
+      const howTo = el("div", { className: "card" });
+      howTo.appendChild(el("h3", { className: "card-title", style: "margin-bottom:12px" }, "How to Use OptimusPy"));
+
+      const steps = [
+        { n: "1", title: "Connect", desc: "Select a TM1 instance from the sidebar and enter your password if needed." },
+        { n: "2", title: "Scan", desc: "Go to Cubes and scan the instance. OptimusPy identifies cubes that may benefit from reordering based on RAM usage." },
+        { n: "3", title: "Configure", desc: "Select a cube, choose an optimization mode (Greedy, Predefined, Position, or Dimension), pick views to benchmark, and set the number of executions per permutation." },
+        { n: "4", title: "Optimize", desc: "Start the optimization. OptimusPy will test dimension orderings, measuring RAM and query time for each. You can stop the process at any time." },
+        { n: "5", title: "Review", desc: "Check the Results tab for CSV/HTML reports showing all tested permutations and the recommended order." },
+      ];
+      steps.forEach(s => {
+        const row = el("div", { style: "display:flex;gap:10px;margin-bottom:10px" });
+        row.appendChild(el("div", { style: "width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0" }, s.n));
+        const text = el("div");
+        text.appendChild(el("div", { style: "font-weight:600;font-size:13px;color:var(--text-primary)" }, s.title));
+        text.appendChild(el("div", { style: "font-size:12px;color:var(--text-secondary);line-height:1.4" }, s.desc));
+        row.appendChild(text);
+        howTo.appendChild(row);
+      });
+
+      // Optimization modes
+      howTo.appendChild(el("div", { style: "margin-top:14px;padding-top:14px;border-top:1px solid var(--border-secondary)" }));
+      howTo.appendChild(el("div", { style: "font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px" }, "Optimization Modes"));
+      const modes = [
+        { badge: "Greedy", color: "var(--accent)", desc: "Outside-in algorithm. Tests each dimension for first and last position, then works inward. Best general-purpose approach." },
+        { badge: "Predefined", color: "var(--warning)", desc: "Benchmarks specific dimension orders you define. Use when you have candidate orders from manual analysis." },
+        { badge: "Position", color: "var(--success)", desc: "Tests all dimensions for a single position (e.g., find the best last dimension). Quick, targeted optimization." },
+        { badge: "Dimension", color: "var(--error)", desc: "Tests all positions for a single dimension. Useful when you know which dimension to focus on." },
+      ];
+      modes.forEach(m => {
+        const row = el("div", { style: "display:flex;gap:8px;align-items:baseline;margin-bottom:6px" });
+        row.appendChild(el("span", { style: `display:inline-block;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#fff;background:${m.color}` }, m.badge));
+        row.appendChild(el("span", { style: "font-size:12px;color:var(--text-secondary);line-height:1.4" }, m.desc));
+        howTo.appendChild(row);
+      });
+
+      wrap.appendChild(howTo);
+
+      // ---- Dimension Ordering Tips ----
+      const tips = el("div", { className: "card" });
+      tips.appendChild(el("h3", { className: "card-title", style: "margin-bottom:12px" }, "Dimension Ordering Tips"));
+      tips.appendChild(el("div", { style: "font-size:12px;color:var(--text-tertiary);margin-bottom:14px;line-height:1.4" },
+        "Based on research from IBM documentation, the TM1 community, and the Horizon 2021 presentation by Hubert Heijkers, IBM Chief Architect of the TM1 Server."));
+
+      const tipItems = [
+        {
+          icon: "&#x1F3AF;", title: "The 90/10 Rule",
+          text: "~90% of memory optimization comes from correctly identifying the last dimension. The second-to-last accounts for ~9%. Getting the last dimension right is the single most impactful change."
+        },
+        {
+          icon: "&#x2B06;", title: "Small-Sparse First, Large-Dense Last",
+          text: "Order dimensions from smallest/sparsest at the top to largest/densest at the bottom. Dimensions higher in the storage order multiply the index structure below them \u2014 fewer branches at the top means less replication."
+        },
+        {
+          icon: "&#x1F50D;", title: "Title Dimensions First for Query Speed",
+          text: "Dimensions commonly used in view titles or MDX WHERE clauses (Version, Year, Currency) should be near the top. This lets TM1 prune the internal index early, drastically reducing traversal."
+        },
+        {
+          icon: "&#x1F4BE;", title: "Partitioning Dimension First for Write Speed",
+          text: "If TI loads data partitioned by a dimension (e.g., one file per Store), place that dimension first. All writes go to a single compact branch, minimizing lock contention."
+        },
+        {
+          icon: "&#x26A0;", title: "Watch for String Dimensions",
+          text: "TM1 requires the dimension with string elements to stay in the last position. This can prevent the optimal dimension from taking that spot. Best practice: separate string elements into a different cube."
+        },
+        {
+          icon: "&#x1F4CA;", title: "Density Matters More Than Size",
+          text: "A 10,000-element dimension at 2% density behaves very differently from one at 95%. Size alone isn\u2019t enough \u2014 always consider how much of the dimension is actually populated with data."
+        },
+        {
+          icon: "&#x2696;", title: "RAM vs. Speed Is a Trade-Off",
+          text: "The optimal order for memory, query speed, and write speed can differ for the same cube. Under 2 GB? Prioritize query speed. Hitting RAM limits? Prioritize memory. Use OptimusPy to find the best compromise."
+        },
+        {
+          icon: "&#x1F504;", title: "Re-evaluate Periodically",
+          text: "Data volumes and distribution patterns change over time. An order that was optimal last year may no longer be. Re-run the analysis after major data changes or growth."
+        },
+      ];
+      tipItems.forEach(t => {
+        const row = el("div", { style: "display:flex;gap:10px;margin-bottom:12px" });
+        row.appendChild(el("div", { html: t.icon, style: "font-size:16px;flex-shrink:0;margin-top:1px" }));
+        const text = el("div");
+        text.appendChild(el("div", { style: "font-weight:600;font-size:13px;color:var(--text-primary)" }, t.title));
+        text.appendChild(el("div", { style: "font-size:12px;color:var(--text-secondary);line-height:1.4" }, t.text));
+        row.appendChild(text);
+        tips.appendChild(row);
+      });
+
+      // Storage vs Presentation callout
+      tips.appendChild(el("div", { style: "margin-top:10px;padding:12px;border-radius:var(--radius-md);background:var(--bg-tertiary);border:1px solid var(--border-secondary);font-size:12px;color:var(--text-secondary);line-height:1.5" },
+        el("strong", { style: "color:var(--text-primary)" }, "Storage order \u2260 Presentation order. "),
+        "The storage (internal) order controls how TM1 indexes data in memory. It can be changed at any time without affecting rules, processes, views, or reports. The presentation (build) order is set at cube creation and determines how dimensions appear in viewers and code \u2014 it cannot be changed. OptimusPy only modifies the storage order."
+      ));
+
+      wrap.appendChild(tips);
+      return wrap;
     },
 
     unmount() {},
