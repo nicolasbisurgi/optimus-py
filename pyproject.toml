@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optimuspy"
+version = "2.0.0"
+description = "OptimusPy — TM1 Cube Dimension Order Optimizer"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "nicolasbisurgi", email = "nbisurgi@cubewise.com"},
+]
+maintainers = [
+    {name = "Cubewise CODE"},
+]
+keywords = ["TM1", "Planning Analytics", "TM1Py", "dimension order", "optimization", "cube"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "TM1py>=1.5.0",
+    "configparser>=3.5.3",
+    "mdxpy>=0.2",
+    "xlsxwriter",
+    "pandas",
+    "Jinja2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=5.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/cubewise-code/optimus-py"
+
+[project.scripts]
+optimuspy = "optimuspy.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"optimuspy" = ["images/*.png", "images/*.svg"]

@@ -6,8 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Union
 
-from execution_mode import ExecutionMode
-from results import ExecutionContext, PermutationResult
+from optimuspy.execution_mode import ExecutionMode
+from optimuspy.results import ExecutionContext, PermutationResult
 
 CHECKPOINT_VERSION = 1
 

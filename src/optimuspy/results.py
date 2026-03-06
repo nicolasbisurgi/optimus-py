@@ -8,24 +8,14 @@ import statistics
 import time
 from pathlib import Path
 from typing import List, Union
-from execution_mode import ExecutionMode
+from optimuspy.execution_mode import ExecutionMode
 
-import seaborn as sns
-
-sns.set_theme()
-import matplotlib.pyplot as plt
 import pandas as pd
 
 SEPARATOR = ","
 HEADER = ["ID", "Mode", "Is Best", "Composite Query Time", "Query Ratio",
           "Composite Process Time", "Process Ratio", "RAM", "RAM in GB", "% Reduction",
           "Reorder Duration"]
-
-PALETTE = {
-    'Original Order': 'tab:blue',
-    'Result': 'tab:green',
-    'Iterations': 'tab:grey'
-}
 
 
 class ExecutionContext:
@@ -88,6 +78,7 @@ class PermutationResult:
         self.query_times_by_view = query_times_by_view
         self.process_times_by_process = process_times_by_process
         self.is_best = False
+        self.include_views = bool(view_names)
         self.include_process = bool(process_names)
 
         # from original dimension order
@@ -106,6 +97,8 @@ class PermutationResult:
         self.permutation_id = context.next_id()
 
     def median_query_time(self, view_name: str = None) -> float:
+        if not self.query_times_by_view:
+            return 0.0
         view_name = view_name or self.view_names[0]
         median = statistics.median(self.query_times_by_view[view_name])
         if not median:
@@ -118,6 +111,8 @@ class PermutationResult:
 
     def composite_query_time(self) -> float:
         """Median of median query times across all views."""
+        if not self.query_times_by_view:
+            return 0.0
         medians = [statistics.median(times) for times in self.query_times_by_view.values()]
         return statistics.median(medians) if len(medians) > 1 else medians[0]
 
@@ -136,16 +131,18 @@ class PermutationResult:
         return SEPARATOR.join(self.build_header()) + "\n"
 
     def to_row(self, original_order_result: 'PermutationResult') -> List[str]:
-        composite_qt = self.composite_query_time()
-        original_composite_qt = original_order_result.composite_query_time()
-        query_time_ratio = composite_qt / original_composite_qt - 1
-
         row = [
             str(self.permutation_id),
             self.mode.label,
-            str(self.is_best),
-            composite_qt,
-            query_time_ratio]
+            str(self.is_best)]
+
+        if self.include_views:
+            composite_qt = self.composite_query_time()
+            original_composite_qt = original_order_result.composite_query_time()
+            query_time_ratio = composite_qt / original_composite_qt - 1
+            row += [composite_qt, query_time_ratio]
+        else:
+            row += [0, 0]
 
         if self.include_process:
             composite_pt = self.composite_process_time()
@@ -180,6 +177,7 @@ class PermutationResult:
             if data.get('process_times_by_process') else {}
         )
         instance.is_best = False
+        instance.include_views = bool(data['view_names'])
         instance.include_process = bool(data['process_names'])
         instance.ram_usage = data['ram_usage']
         instance.ram_percentage_change = data['ram_percentage_change']
@@ -197,6 +195,7 @@ class OptimusResult:
         self.permutation_results = permutation_results
         if len(permutation_results) == 0:
             raise RuntimeError("Number of permutation results can not be 0")
+        self.include_views = permutation_results[0].include_views
         self.include_process = permutation_results[0].include_process
 
         self.best_result = self.determine_best_result()
@@ -262,43 +261,6 @@ class OptimusResult:
             file_name = file_name.with_suffix(".csv")
             return self.to_csv(file_name)
 
-    def to_png(self, file_name):
-        df = self.to_dataframe()
-
-        plt.figure(figsize=(8, 8))
-        sns.set_style("ticks")
-
-        p = sns.scatterplot(
-            data=df,
-            x="RAM in GB",
-            y="Query Ratio",
-            size="Composite Process Time" if self.include_process else None,
-            hue="Mode",
-            palette=PALETTE,
-            edgecolors="black",
-            legend=True,
-            alpha=0.8,
-            sizes=(20, 500) if self.include_process else None)
-
-        for index, row in df.iterrows():
-            p.text(row["RAM in GB"],
-                   row["Query Ratio"],
-                   row["ID"],
-                   color='black')
-
-        sns.despine(trim=True, offset=2)
-        p.set(title=f"Dimension Reorder Results for {self.cube_name}")
-        p.set_xlabel("RAM (GB)")
-        p.set_ylabel("Query Time Compared to Original Order")
-        p.legend(title='Legend', loc='best')
-
-        plt.grid()
-        plt.tight_layout()
-
-        os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
-        plt.savefig(file_name, dpi=400)
-        plt.clf()
-
     @staticmethod
     def _load_logo_base64() -> str:
         logo_path = Path(__file__).parent / "images" / "logo.png"
@@ -326,10 +288,14 @@ class OptimusResult:
         original_ram_gb = original.ram_usage / (1024 ** 3)
         best_ram_gb = best.ram_usage / (1024 ** 3) if best else original_ram_gb
         ram_reduction = best.ram_reduction if best else 0
-        original_qt = original.composite_query_time()
-        best_qt = best.composite_query_time() if best else original_qt
-        query_improvement = 1 - best_qt / original_qt if best and original_qt else 0
         orders_tested = len(self.permutation_results)
+
+        if self.include_views:
+            original_qt = original.composite_query_time()
+            best_qt = best.composite_query_time() if best else original_qt
+            query_improvement = 1 - best_qt / original_qt if best and original_qt else 0
+        else:
+            original_qt = best_qt = query_improvement = 0
 
         def fmt_duration(seconds):
             if seconds < 60:
@@ -345,13 +311,19 @@ class OptimusResult:
 
         # Build chart data
         chart_data = []
+        original_pt = original.composite_process_time() if self.include_process else 0
         for r in self.permutation_results:
             ram_gb = float(r.ram_usage) / (1024 ** 3)
-            qt_ratio = r.composite_query_time() / original_qt - 1 if original_qt else 0
+            if self.include_views:
+                y_value = r.composite_query_time() / original_qt - 1 if original_qt else 0
+            elif self.include_process:
+                y_value = r.composite_process_time() / original_pt - 1 if original_pt else 0
+            else:
+                y_value = round(r.ram_reduction, 4)
             chart_data.append({
                 "id": r.permutation_id,
                 "x": round(ram_gb, 4),
-                "y": round(qt_ratio, 4),
+                "y": round(y_value, 4),
                 "mode": r.mode.label,
                 "order": " > ".join(r.dimension_order),
                 "processTime": round(r.composite_process_time(), 5) if self.include_process else None,
@@ -360,27 +332,34 @@ class OptimusResult:
         # Build permutation data for JavaScript table rendering
         perms_data = []
         for r in self.permutation_results:
-            composite_qt = r.composite_query_time()
-            qt_ratio = composite_qt / original_qt - 1 if original_qt else 0
             ram_gb = float(r.ram_usage) / (1024 ** 3)
             entry = {
                 "id": r.permutation_id,
                 "mode": r.mode.label,
                 "isBest": r.is_best,
                 "dims": list(r.dimension_order),
-                "qt": round(composite_qt, 10),
-                "qtRatio": round(qt_ratio, 10),
                 "ramGB": round(ram_gb, 10),
                 "ramReduction": round(r.ram_reduction, 4),
                 "reorderDur": round(r.reorder_duration, 6),
             }
+            if self.include_views:
+                composite_qt = r.composite_query_time()
+                qt_ratio = composite_qt / original_qt - 1 if original_qt else 0
+                entry["qt"] = round(composite_qt, 10)
+                entry["qtRatio"] = round(qt_ratio, 10)
             if self.include_process:
                 composite_pt = r.composite_process_time()
-                original_pt = original.composite_process_time()
                 pt_ratio = composite_pt / original_pt - 1 if original_pt else 0
                 entry["pt"] = round(composite_pt, 10)
                 entry["ptRatio"] = round(pt_ratio, 10)
             perms_data.append(entry)
+
+        # Query header columns for <thead>
+        query_header = ""
+        if self.include_views:
+            query_header = """
+                        <th class="sortable" data-sort="qt">Query Time <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="qtRatio">Query Ratio <span class="sort-arrow"></span></th>"""
 
         # Process header columns for <thead>
         process_header = ""
@@ -389,8 +368,23 @@ class OptimusResult:
                         <th class="sortable" data-sort="pt">Process Time <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="ptRatio">Process Ratio <span class="sort-arrow"></span></th>"""
 
-        total_cols = 9 + (2 if self.include_process else 0)
+        total_cols = 7 + (2 if self.include_views else 0) + (2 if self.include_process else 0)
+        include_views_js = "true" if self.include_views else "false"
         include_process_js = "true" if self.include_process else "false"
+
+        # Query summary cards
+        query_cards = ""
+        if self.include_views:
+            query_cards = f"""
+                <div class="card">
+                    <div class="card-label">Original Query Time</div>
+                    <div class="card-value">{original_qt:.3f}s</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Best Query Time</div>
+                    <div class="card-value">{best_qt:.3f}s</div>
+                    <div class="card-sub"><span class="{'negative' if query_improvement > 0 else ''}">{fmt_pct(-query_improvement)} vs original</span></div>
+                </div>"""
 
         # Process summary cards
         process_cards = ""
@@ -612,15 +606,7 @@ class OptimusResult:
             <div class="card-value">{best_ram_gb:.2f} GB</div>
             <div class="card-sub"><span class="{'negative' if ram_reduction > 0 else ''}">{f'{ram_reduction:.0%}'} reduction</span></div>
         </div>
-        <div class="card">
-            <div class="card-label">Original Query Time</div>
-            <div class="card-value">{original_qt:.3f}s</div>
-        </div>
-        <div class="card">
-            <div class="card-label">Best Query Time</div>
-            <div class="card-value">{best_qt:.3f}s</div>
-            <div class="card-sub"><span class="{'negative' if query_improvement > 0 else ''}">{fmt_pct(-query_improvement)} vs original</span></div>
-        </div>
+        {query_cards}
         {process_cards}
         <div class="card">
             <div class="card-label">Total Duration</div>
@@ -631,7 +617,7 @@ class OptimusResult:
     {best_order_html}
 
     <div class="panel">
-        <h2>RAM vs Query Performance</h2>
+        <h2>{"RAM vs Query Performance" if self.include_views else "RAM vs Process Performance" if self.include_process else "RAM Usage Comparison"}</h2>
         <div class="chart-container">
             <canvas id="scatterChart"></canvas>
         </div>
@@ -647,8 +633,7 @@ class OptimusResult:
                         <th style="width:30px"></th>
                         <th class="sortable" data-sort="id" style="width:40px">ID <span class="sort-arrow">&#9650;</span></th>
                         <th style="width:100px">Mode</th>
-                        <th class="sortable" data-sort="qt">Query Time <span class="sort-arrow"></span></th>
-                        <th class="sortable" data-sort="qtRatio">Query Ratio <span class="sort-arrow"></span></th>
+                        {query_header}
                         {process_header}
                         <th class="sortable" data-sort="ramGB">RAM <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="ramReduction">Reduction <span class="sort-arrow"></span></th>
@@ -717,7 +702,7 @@ new Chart(document.getElementById('scatterChart'), {{
         scales: {{
             x: {{ title: {{ display: true, text: 'RAM (GB)' }} }},
             y: {{
-                title: {{ display: true, text: 'Query Time vs Original' }},
+                title: {{ display: true, text: '{"Query Time vs Original" if self.include_views else "Process Time vs Original" if self.include_process else "RAM Reduction"}' }},
                 ticks: {{ callback: v => (v * 100).toFixed(0) + '%' }}
             }}
         }}
@@ -726,19 +711,20 @@ new Chart(document.getElementById('scatterChart'), {{
 </script>
 
 <script>
+const includeViews = {include_views_js};
 const includeProcess = {include_process_js};
 const totalCols = {total_cols};
 const originalOrder = {json.dumps(list(original.dimension_order))};
 const perms = {json.dumps(perms_data)};
 
 const iterations = perms.filter(p => p.mode !== 'Original Order');
-const bestQuery = iterations.length ? [...iterations].sort((a,b) => a.qt - b.qt)[0] : null;
+const bestQuery = includeViews && iterations.length ? [...iterations].sort((a,b) => a.qt - b.qt)[0] : null;
 const bestProcess = includeProcess && iterations.length ? [...iterations].sort((a,b) => a.pt - b.pt)[0] : null;
 const bestRam = iterations.length ? [...iterations].sort((a,b) => a.ramGB - b.ramGB)[0] : null;
 const bestOverall = perms.find(p => p.isBest);
 
 iterations.forEach(p => {{
-    p.queryRank = [...iterations].sort((a,b) => a.qt - b.qt).findIndex(x => x.id === p.id) + 1;
+    if (includeViews) p.queryRank = [...iterations].sort((a,b) => a.qt - b.qt).findIndex(x => x.id === p.id) + 1;
     if (includeProcess) p.processRank = [...iterations].sort((a,b) => a.pt - b.pt).findIndex(x => x.id === p.id) + 1;
 }});
 
@@ -747,19 +733,26 @@ function formatPct(v) {{ return (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
 function pctClass(v) {{ return v > 0 ? 'positive' : v < 0 ? 'negative' : ''; }}
 
 if (bestOverall) {{
+    let bestDetail = [];
+    if (includeViews) bestDetail.push(bestOverall.qt.toFixed(4) + 's');
+    if (includeProcess) bestDetail.push(bestOverall.pt.toFixed(2) + 's');
+    bestDetail.push((bestOverall.ramGB * 1024).toFixed(1) + 'MB');
     let podiumHtml = `
         <div class="podium-card podium-best" data-highlight="${{bestOverall.id}}">
             <div class="podium-title">Best Overall</div>
             <div class="podium-id">#${{bestOverall.id}}</div>
-            <div class="podium-detail">${{bestOverall.qt.toFixed(4)}}s${{includeProcess ? ' &middot; ' + bestOverall.pt.toFixed(2) + 's' : ''}} &middot; ${{(bestOverall.ramGB * 1024).toFixed(1)}}MB</div>
+            <div class="podium-detail">${{bestDetail.join(' &middot; ')}}</div>
             <div class="podium-dims">${{shortDims(bestOverall.dims)}}</div>
-        </div>
+        </div>`;
+    if (includeViews && bestQuery) {{
+        podiumHtml += `
         <div class="podium-card podium-query" data-highlight="${{bestQuery.id}}">
             <div class="podium-title">#1 Fastest Query</div>
             <div class="podium-id">#${{bestQuery.id}}</div>
             <div class="podium-detail">${{bestQuery.qt.toFixed(5)}}s (${{formatPct(bestQuery.qtRatio)}})</div>
             <div class="podium-dims">${{shortDims(bestQuery.dims)}}</div>
         </div>`;
+    }}
     if (includeProcess && bestProcess) {{
         podiumHtml += `
         <div class="podium-card podium-process" data-highlight="${{bestProcess.id}}">
@@ -826,6 +819,17 @@ function renderTable() {{
             return `<tr><td>${{i + 1}}</td><td class="label-cell">${{d}}</td><td>${{oi + 1}}</td><td>${{mv}}</td></tr>`;
         }}).join('');
 
+        let queryCells = '';
+        let queryStats = '';
+        if (includeViews) {{
+            queryCells = `
+                <td class="num">${{p.qt.toFixed(5)}}</td>
+                <td class="num ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</td>`;
+            queryStats = `
+                <div class="stat-row"><span class="stat-label">Query Time</span><span class="stat-val">${{p.qt.toFixed(5)}}s</span></div>
+                <div class="stat-row"><span class="stat-label">vs Original</span><span class="stat-val ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</span></div>`;
+        }}
+
         let processCells = '';
         let processStats = '';
         if (includeProcess) {{
@@ -838,10 +842,12 @@ function renderTable() {{
         }}
 
         let rankStats = '';
-        if (!isOriginal && p.queryRank) {{
-            rankStats += `<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0"><span class="stat-label">Query Rank</span><span class="stat-val">#${{p.queryRank}} of ${{iterations.length}}</span></div>`;
+        if (!isOriginal) {{
+            if (includeViews && p.queryRank) {{
+                rankStats += `<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0"><span class="stat-label">Query Rank</span><span class="stat-val">#${{p.queryRank}} of ${{iterations.length}}</span></div>`;
+            }}
             if (includeProcess && p.processRank) {{
-                rankStats += `<div class="stat-row"><span class="stat-label">Process Rank</span><span class="stat-val">#${{p.processRank}} of ${{iterations.length}}</span></div>`;
+                rankStats += `<div class="stat-row" style="${{!includeViews ? 'margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0' : ''}}"><span class="stat-label">Process Rank</span><span class="stat-val">#${{p.processRank}} of ${{iterations.length}}</span></div>`;
             }}
         }}
 
@@ -850,8 +856,7 @@ function renderTable() {{
             <td><span class="expand-icon">&#9654;</span></td>
             <td class="num">${{p.id}}</td>
             <td>${{modeBadge}} ${{rankBadges}}</td>
-            <td class="num">${{p.qt.toFixed(5)}}</td>
-            <td class="num ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</td>
+            ${{queryCells}}
             ${{processCells}}
             <td class="num">${{(p.ramGB * 1024).toFixed(2)}} MB</td>
             <td class="num ${{p.ramReduction > 0 ? 'negative' : ''}}">${{(p.ramReduction * 100).toFixed(0)}}%</td>
@@ -871,8 +876,7 @@ function renderTable() {{
                     </div>
                     <div class="detail-block">
                         <h4>Performance Summary</h4>
-                        <div class="stat-row"><span class="stat-label">Query Time</span><span class="stat-val">${{p.qt.toFixed(5)}}s</span></div>
-                        <div class="stat-row"><span class="stat-label">vs Original</span><span class="stat-val ${{pctClass(p.qtRatio)}}">${{formatPct(p.qtRatio)}}</span></div>
+                        ${{queryStats}}
                         ${{processStats}}
                         <div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0"><span class="stat-label">RAM Usage</span><span class="stat-val">${{(p.ramGB * 1024).toFixed(2)}} MB</span></div>
                         <div class="stat-row"><span class="stat-label">RAM Reduction</span><span class="stat-val ${{p.ramReduction > 0 ? 'negative' : ''}}">${{(p.ramReduction * 100).toFixed(0)}}%</span></div>
@@ -929,32 +933,30 @@ renderTable();
         ram_range = [r.ram_usage for r in self.permutation_results]
         min_ram, max_ram = min(ram_range), max(ram_range)
 
-        query_range = [r.composite_query_time() for r in self.permutation_results]
-        min_query, max_query = min(query_range), max(query_range)
+        if self.include_views:
+            query_range = [r.composite_query_time() for r in self.permutation_results]
+            min_query, max_query = min(query_range), max(query_range)
 
         if self.include_process:
             process_range = [r.composite_process_time() for r in self.permutation_results]
             min_process, max_process = min(process_range), max(process_range)
-        else:
-            min_process = max_process = 1
 
         # find a good balance between speed and ram and process speed
         for value in (0.01, 0.025, 0.05):
             ram_threshold = min_ram + value * (max_ram - min_ram)
-            query_threshold = min_query + value * (max_query - min_query)
 
-            if self.include_process:
-                process_threshold = min_process + value * (max_process - min_process)
-                for r in self.permutation_results:
-                    if (r.ram_usage <= ram_threshold
-                            and r.composite_query_time() <= query_threshold
-                            and r.composite_process_time() <= process_threshold):
-                        return r
-            else:
-                for r in self.permutation_results:
-                    if (r.ram_usage <= ram_threshold
-                            and r.composite_query_time() <= query_threshold):
-                        return r
+            for r in self.permutation_results:
+                if r.ram_usage > ram_threshold:
+                    continue
+                if self.include_views:
+                    query_threshold = min_query + value * (max_query - min_query)
+                    if r.composite_query_time() > query_threshold:
+                        continue
+                if self.include_process:
+                    process_threshold = min_process + value * (max_process - min_process)
+                    if r.composite_process_time() > process_threshold:
+                        continue
+                return r
 
         # no dimension order falls in sweet spot
         return None

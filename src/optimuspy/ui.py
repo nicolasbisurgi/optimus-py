@@ -1,0 +1,852 @@
+"""
+OptimusPy Workflow UI — Lightweight local web interface for the scan → optimize → set pipeline.
+
+Usage:
+    python ui.py                                    # localhost:8765, default config.ini
+    python ui.py --port 9000                        # custom port
+    python ui.py --config config/production.ini     # custom config.ini
+"""
+
+import argparse
+import configparser
+import json
+import logging
+import os
+import queue
+import re
+import sys
+import threading
+import time
+import uuid
+import webbrowser
+from contextlib import suppress
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
+
+from TM1py import TM1Service
+
+from optimuspy.core import (
+    get_tm1_config, load_cube_config, validate_cube_config,
+    main as run_optimuspy, _scan_to_data, _scan_to_data_light, APP_NAME, RESULT_PATH,
+    set_current_directory, _collect_dimension_metadata, _compute_suggested_order
+)
+from optimuspy.executors import OptimizationCancelled
+
+DEFAULT_PORT = 8765
+DEFAULT_CONFIG_INI = "config/config.ini"
+
+# Global state
+_config_ini_path = DEFAULT_CONFIG_INI
+
+
+def _resolve_static_dir() -> Path:
+    """Resolve the static/ directory — works for pip install and PyInstaller frozen exe."""
+    return Path(__file__).parent / "static"
+
+
+def _create_tm1_connection(instance_name: str, password: str = None):
+    config = get_tm1_config(_config_ini_path)
+    tm1_args = dict(config[instance_name])
+    tm1_args['session_context'] = APP_NAME
+    if password:
+        tm1_args['password'] = password
+        tm1_args['decode_b64'] = False
+    return TM1Service(**tm1_args)
+
+
+# ---------------------------------------------------------------------------
+# Job Manager — tracks background optimize/set jobs with SSE progress
+# ---------------------------------------------------------------------------
+
+class JobLogHandler(logging.Handler):
+    """Routes log records to a job's progress queue for SSE streaming."""
+
+    def __init__(self, progress_queue: queue.Queue):
+        super().__init__()
+        self.progress_queue = progress_queue
+
+    def emit(self, record):
+        try:
+            self.progress_queue.put({
+                "event": "log",
+                "data": {
+                    "timestamp": time.strftime("%H:%M:%S"),
+                    "level": record.levelname,
+                    "message": record.getMessage()
+                }
+            })
+        except Exception:
+            pass
+
+
+class JobManager:
+    """Manages background optimize/set jobs."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._jobs = {}
+        self._active_job_id = None
+
+    def start_job(self, mode: str, cube_config: dict, password: str = None) -> str:
+        with self._lock:
+            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
+                raise RuntimeError("A job is already running")
+
+            job_id = str(uuid.uuid4())[:8]
+            progress_q = queue.Queue()
+
+            cancel_event = threading.Event()
+            tm1_holder = {}  # populated by core.main() with {"tm1": TM1Service}
+            job = {
+                "job_id": job_id,
+                "status": "running",
+                "mode": mode,
+                "cube_name": cube_config.get("cube", "unknown"),
+                "instance": cube_config.get("instance", "unknown"),
+                "progress_queue": progress_q,
+                "cancel_event": cancel_event,
+                "tm1_holder": tm1_holder,
+                "started_at": time.time(),
+                "completed_at": None,
+                "result_files": [],
+                "error": None,
+                "final_event": None,
+            }
+            self._jobs[job_id] = job
+            self._active_job_id = job_id
+
+            thread = threading.Thread(
+                target=self._run_job,
+                args=(job_id, mode, cube_config, password),
+                daemon=True
+            )
+            thread.start()
+            return job_id
+
+    def _run_job(self, job_id: str, mode: str, cube_config: dict, password: str):
+        job = self._jobs[job_id]
+        handler = JobLogHandler(job["progress_queue"])
+        handler.setLevel(logging.INFO)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+
+        try:
+            success = run_optimuspy(
+                mode=mode,
+                cube_config=cube_config,
+                config_ini_path=_config_ini_path,
+                password=password,
+                cancel_event=job["cancel_event"],
+                tm1_holder=job["tm1_holder"],
+            )
+
+            # Find result files
+            cube_name = cube_config.get("cube", "")
+            result_files = []
+            if RESULT_PATH.exists():
+                for f in sorted(RESULT_PATH.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                    if f.name.startswith(cube_name) and not f.name.startswith("checkpoint"):
+                        result_files.append(f.name)
+                        if len(result_files) >= 4:
+                            break
+
+            final_event = {
+                "event": "complete",
+                "data": {"success": success, "result_files": result_files}
+            }
+
+            with self._lock:
+                job["status"] = "completed" if success else "failed"
+                job["result_files"] = result_files
+                job["final_event"] = final_event
+
+            job["progress_queue"].put(final_event)
+        except OptimizationCancelled:
+            logging.info("Optimization cancelled by user")
+            final_event = {
+                "event": "cancelled",
+                "data": {"message": "Optimization cancelled by user"}
+            }
+            with self._lock:
+                job["status"] = "cancelled"
+                job["final_event"] = final_event
+
+            job["progress_queue"].put(final_event)
+        except Exception as e:
+            final_event = {
+                "event": "error_event",
+                "data": {"error": str(e)}
+            }
+            with self._lock:
+                job["status"] = "failed"
+                job["error"] = str(e)
+                job["final_event"] = final_event
+
+            job["progress_queue"].put(final_event)
+        finally:
+            with self._lock:
+                job["completed_at"] = time.time()
+            job["progress_queue"].put(None)  # Sentinel
+            root_logger.removeHandler(handler)
+            with self._lock:
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
+    def cancel_job(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job["status"] != "running":
+                return False
+            job["cancel_event"].set()
+            tm1_holder = job.get("tm1_holder", {})
+
+        # Cancel active TM1 threads outside the lock (network call)
+        tm1 = tm1_holder.get("tm1")
+        if tm1:
+            try:
+                threads = tm1.monitoring.get_active_session_threads()
+                for t in threads:
+                    try:
+                        tm1.monitoring.cancel_thread(t["ID"])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return True
+
+    def get_job(self, job_id: str) -> dict:
+        return self._jobs.get(job_id)
+
+    def list_jobs(self) -> list:
+        with self._lock:
+            jobs = []
+            for j in self._jobs.values():
+                jobs.append({
+                    "job_id": j["job_id"],
+                    "status": j["status"],
+                    "mode": j["mode"],
+                    "cube_name": j["cube_name"],
+                    "instance": j["instance"],
+                    "started_at": j["started_at"],
+                    "completed_at": j["completed_at"],
+                    "result_files": j["result_files"],
+                    "error": j["error"],
+                })
+            return sorted(jobs, key=lambda x: x["started_at"], reverse=True)
+
+
+# Singleton
+job_manager = JobManager()
+
+
+# ---------------------------------------------------------------------------
+# HTTP Request Handler
+# ---------------------------------------------------------------------------
+
+class OptimusPyHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, format, *args):
+        # Suppress default HTTP logging to avoid cluttering the console
+        pass
+
+    def _send_json(self, status: int, data: dict):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length))
+
+    # ---- Routing ----
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+
+        # Static file serving
+        if path == "/":
+            return self._serve_static_file("index.html")
+        elif path.startswith("/static/"):
+            return self._serve_static_file(path[len("/static/"):])
+        elif path.startswith("/images/"):
+            return self._serve_image_file(path[len("/images/"):])
+        # API endpoints
+        elif path == "/api/instances":
+            return self._handle_instances()
+        elif path.startswith("/api/instance/"):
+            instance_name = unquote(path[len("/api/instance/"):])
+            return self._handle_get_instance(instance_name)
+        elif path == "/api/configs":
+            return self._handle_list_configs()
+        elif path == "/api/saved-cubes":
+            return self._handle_list_saved_cubes()
+        elif path == "/api/status":
+            return self._handle_status()
+        elif path == "/api/results":
+            return self._handle_list_results()
+        elif path.startswith("/api/result/"):
+            return self._handle_serve_result(path[len("/api/result/"):])
+        elif path == "/api/jobs":
+            return self._handle_list_jobs()
+        elif path.startswith("/api/job/") and path.endswith("/stream"):
+            job_id = path[len("/api/job/"):-len("/stream")]
+            return self._handle_job_stream(job_id)
+        elif path.startswith("/api/job/"):
+            job_id = path[len("/api/job/"):]
+            return self._handle_get_job(job_id)
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+
+        try:
+            body = self._read_body()
+        except Exception as e:
+            return self._send_json(400, {"error": f"Invalid JSON: {e}"})
+
+        if path == "/api/connect":
+            return self._handle_connect(body)
+        elif path == "/api/scan":
+            return self._handle_scan(body)
+        elif path == "/api/cubes":
+            return self._handle_cubes(body)
+        elif path == "/api/views":
+            return self._handle_views(body)
+        elif path == "/api/processes":
+            return self._handle_processes(body)
+        elif path == "/api/dimensions":
+            return self._handle_dimensions(body)
+        elif path == "/api/config":
+            return self._handle_save_config(body)
+        elif path == "/api/validate":
+            return self._handle_validate(body)
+        elif path == "/api/job/start":
+            return self._handle_start_job(body)
+        elif path == "/api/process_parameters":
+            return self._handle_process_parameters(body)
+        elif path == "/api/cube_intelligence":
+            return self._handle_cube_intelligence(body)
+        elif path.startswith("/api/job/") and path.endswith("/cancel"):
+            job_id = path.split("/")[3]
+            return self._handle_cancel_job(job_id)
+        elif path.startswith("/api/instance/"):
+            instance_name = unquote(path[len("/api/instance/"):])
+            return self._handle_update_instance(instance_name, body)
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path.startswith("/api/config/"):
+            filename = unquote(path[len("/api/config/"):])
+            return self._handle_delete_config(filename)
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    # ---- Static File Serving ----
+
+    def _serve_static_file(self, filename: str):
+        static_dir = _resolve_static_dir()
+        # Sanitize: resolve and ensure the file is under static_dir
+        try:
+            requested = (static_dir / filename).resolve()
+            if not str(requested).startswith(str(static_dir.resolve())):
+                return self._send_json(403, {"error": "Forbidden"})
+        except (ValueError, OSError):
+            return self._send_json(400, {"error": "Invalid path"})
+
+        if not requested.exists() or not requested.is_file():
+            return self._send_json(404, {"error": "Not found"})
+
+        content_types = {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+            ".json": "application/json",
+        }
+        ct = content_types.get(requested.suffix.lower(), "application/octet-stream")
+
+        with open(requested, "rb") as f:
+            data = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_image_file(self, filename: str):
+        images_dir = Path(__file__).parent / "images"
+        try:
+            requested = (images_dir / filename).resolve()
+            if not str(requested).startswith(str(images_dir.resolve())):
+                return self._send_json(403, {"error": "Forbidden"})
+        except (ValueError, OSError):
+            return self._send_json(400, {"error": "Invalid path"})
+
+        if not requested.exists() or not requested.is_file():
+            return self._send_json(404, {"error": "Not found"})
+
+        content_types = {
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+        }
+        ct = content_types.get(requested.suffix.lower(), "application/octet-stream")
+
+        with open(requested, "rb") as f:
+            data = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    # ---- API Handlers ----
+
+    def _handle_instances(self):
+        try:
+            config = get_tm1_config(_config_ini_path)
+            instances = [s for s in config.sections()]
+            self._send_json(200, {
+                "instances": instances,
+                "config_path": _config_ini_path
+            })
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_get_instance(self, instance_name: str):
+        try:
+            config = get_tm1_config(_config_ini_path)
+            if instance_name not in config:
+                return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
+            params = dict(config[instance_name])
+            self._send_json(200, {"instance": instance_name, "params": params})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_update_instance(self, instance_name: str, body: dict):
+        try:
+            config = get_tm1_config(_config_ini_path)
+            if instance_name not in config:
+                return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
+            params = body.get("params", {})
+            for key, value in params.items():
+                config[instance_name][key] = str(value)
+            with open(_config_ini_path, "w") as f:
+                config.write(f)
+            self._send_json(200, {"success": True})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_connect(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                server_name = tm1.server.get_server_name()
+                cubes = tm1.cubes.get_all_names()
+                self._send_json(200, {
+                    "success": True,
+                    "server_name": server_name,
+                    "cube_count": len(cubes),
+                })
+        except Exception as e:
+            self._send_json(502, {"error": f"Connection failed: {e}"})
+
+    def _handle_scan(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        ram_percent = body.get("ram_percent", 60)
+        include_optimized = body.get("include_optimized", False)
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized)
+                self._send_json(200, data)
+        except Exception as e:
+            self._send_json(500, {"error": f"Scan failed: {e}"})
+
+    def _handle_cubes(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                cubes = tm1.cubes.get_all_names()
+                # Filter out control cubes
+                cubes = [c for c in cubes if not c.startswith("}")]
+                self._send_json(200, {"cubes": sorted(cubes)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_views(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        cube = body.get("cube")
+        if not instance or not cube:
+            return self._send_json(400, {"error": "Missing 'instance' or 'cube'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                private_views, public_views = tm1.views.get_all_names(cube_name=cube)
+                self._send_json(200, {"views": sorted(public_views)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_processes(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                processes = tm1.processes.get_all_names()
+                # Filter out control processes
+                processes = [p for p in processes if not p.startswith("}")]
+                self._send_json(200, {"processes": sorted(processes)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_process_parameters(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        process_name = body.get("process_name")
+        if not instance or not process_name:
+            return self._send_json(400, {"error": "Missing 'instance' or 'process_name'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                process = tm1.processes.get(process_name)
+                params = [
+                    {"name": p["Name"], "prompt": p.get("Prompt", ""),
+                     "value": p.get("Value", ""), "type": p.get("Type", "String")}
+                    for p in process.parameters
+                ]
+                self._send_json(200, {"process_name": process_name, "parameters": params})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_dimensions(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        cube = body.get("cube")
+        if not instance or not cube:
+            return self._send_json(400, {"error": "Missing 'instance' or 'cube'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                dims = tm1.cubes.get_dimension_names(cube_name=cube)
+                self._send_json(200, {"dimensions": list(dims)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_cube_intelligence(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        cube = body.get("cube")
+        if not instance or not cube:
+            return self._send_json(400, {"error": "Missing 'instance' or 'cube'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                visible_order = tm1.cubes.get_dimension_names(cube_name=cube)
+                storage_order = tm1.cubes.get_storage_dimension_order(cube_name=cube)
+                dimensions_metadata = _collect_dimension_metadata(tm1, visible_order)
+                suggested = _compute_suggested_order(dimensions_metadata)
+            self._send_json(200, {
+                "cube": cube,
+                "storage_order": list(storage_order),
+                "dimensions_metadata": dimensions_metadata,
+                "suggested_order": suggested,
+            })
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_list_configs(self):
+        configs = []
+        for d in ["configs", "samples"]:
+            p = Path(d)
+            if p.exists():
+                for f in sorted(p.glob("*.json")):
+                    try:
+                        data = json.loads(f.read_text())
+                        configs.append({
+                            "path": str(f),
+                            "filename": f.name,
+                            "cube": data.get("cube", ""),
+                            "instance": data.get("instance", ""),
+                        })
+                    except Exception:
+                        pass
+        self._send_json(200, {"configs": configs})
+
+    def _handle_save_config(self, body: dict):
+        config_data = body.get("config")
+        filename = body.get("filename")
+        if not config_data or not filename:
+            return self._send_json(400, {"error": "Missing 'config' or 'filename'"})
+
+        # Sanitize filename
+        safe_name = "".join(c for c in filename if c.isalnum() or c in "._-")
+        if not safe_name.endswith(".json"):
+            safe_name += ".json"
+
+        configs_dir = Path("configs")
+        configs_dir.mkdir(exist_ok=True)
+        config_path = configs_dir / safe_name
+
+        with open(config_path, "w") as f:
+            json.dump(config_data, f, indent=2)
+
+        self._send_json(200, {"path": str(config_path), "filename": safe_name})
+
+    def _handle_delete_config(self, filename: str):
+        safe_name = "".join(c for c in filename if c.isalnum() or c in "._-")
+        config_path = Path("configs") / safe_name
+        if not config_path.exists():
+            return self._send_json(404, {"error": "Config not found"})
+        try:
+            config_path.unlink()
+            self._send_json(200, {"success": True})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_list_saved_cubes(self):
+        configs = []
+        configs_dir = Path("configs")
+        if configs_dir.exists():
+            for f in sorted(configs_dir.glob("*.json")):
+                try:
+                    data = json.loads(f.read_text())
+                    configs.append({
+                        "filename": f.name,
+                        "cube": data.get("cube", ""),
+                        "instance": data.get("instance", ""),
+                        "mode": "predefined" if data.get("predefined_orders") else "greedy",
+                        "views": data.get("views", []),
+                        "executions": data.get("executions", 5),
+                        "last_modified": f.stat().st_mtime,
+                    })
+                except Exception:
+                    pass
+        self._send_json(200, {"saved_cubes": configs})
+
+    def _handle_status(self):
+        jobs = job_manager.list_jobs()
+        active_jobs = [j for j in jobs if j["status"] == "running"]
+        self._send_json(200, {
+            "active_job": active_jobs[0] if active_jobs else None,
+            "total_jobs": len(jobs),
+        })
+
+    def _handle_validate(self, body: dict):
+        config = body.get("config")
+        mode = body.get("mode", "optimize")
+        if not config:
+            return self._send_json(400, {"error": "Missing 'config'"})
+        try:
+            validate_cube_config(config, mode)
+            self._send_json(200, {"valid": True})
+        except ValueError as e:
+            self._send_json(200, {"valid": False, "error": str(e)})
+
+    def _handle_start_job(self, body: dict):
+        mode = body.get("mode", "optimize")
+        cube_config = body.get("cube_config")
+        password = body.get("password")
+        if not cube_config:
+            return self._send_json(400, {"error": "Missing 'cube_config'"})
+        try:
+            job_id = job_manager.start_job(mode, cube_config, password)
+            self._send_json(200, {"job_id": job_id, "status": "running"})
+        except RuntimeError as e:
+            self._send_json(409, {"error": str(e)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_cancel_job(self, job_id: str):
+        success = job_manager.cancel_job(job_id)
+        if success:
+            self._send_json(200, {"status": "cancelling"})
+        else:
+            self._send_json(404, {"error": "Job not found or not running"})
+
+    def _handle_get_job(self, job_id: str):
+        job = job_manager.get_job(job_id)
+        if not job:
+            return self._send_json(404, {"error": "Job not found"})
+        self._send_json(200, {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "mode": job["mode"],
+            "cube_name": job["cube_name"],
+            "instance": job["instance"],
+            "started_at": job["started_at"],
+            "completed_at": job["completed_at"],
+            "result_files": job["result_files"],
+            "error": job["error"],
+        })
+
+    def _handle_job_stream(self, job_id: str):
+        job = job_manager.get_job(job_id)
+        if not job:
+            return self._send_json(404, {"error": "Job not found"})
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        # If the job already finished, send the final event immediately
+        final_event = job.get("final_event")
+        if final_event:
+            try:
+                self.wfile.write(f"event: {final_event['event']}\n".encode())
+                self.wfile.write(f"data: {json.dumps(final_event['data'])}\n\n".encode())
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        q = job["progress_queue"]
+        while True:
+            try:
+                msg = q.get(timeout=30)
+                if msg is None:
+                    break
+                self.wfile.write(f"event: {msg['event']}\n".encode())
+                self.wfile.write(f"data: {json.dumps(msg['data'])}\n\n".encode())
+                self.wfile.flush()
+            except queue.Empty:
+                # Heartbeat
+                try:
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+            except (BrokenPipeError, ConnectionResetError):
+                break
+
+    def _handle_list_results(self):
+        results = []
+        ts_pattern = re.compile(r'_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$')
+        if RESULT_PATH.exists():
+            for f in sorted(RESULT_PATH.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                if f.name.startswith("checkpoint"):
+                    continue
+                # Extract cube name: everything before the _YYYY-MM-DD_HH-MM-SS timestamp
+                stem = f.stem
+                m = ts_pattern.search(stem)
+                cube_name = stem[:m.start()] if m else stem
+                results.append({
+                    "filename": f.name,
+                    "cube": cube_name,
+                    "size": f.stat().st_size,
+                    "modified": f.stat().st_mtime,
+                    "type": f.suffix[1:],
+                })
+        self._send_json(200, {"results": results})
+
+    def _handle_list_jobs(self):
+        self._send_json(200, {"jobs": job_manager.list_jobs()})
+
+    def _handle_serve_result(self, filename: str):
+        # Sanitize: only serve from results/, decode URL-encoded names (e.g. spaces)
+        safe = Path(RESULT_PATH) / Path(unquote(filename)).name
+        if not safe.exists():
+            return self._send_json(404, {"error": "File not found"})
+
+        content_types = {
+            ".html": "text/html",
+            ".csv": "text/csv",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".png": "image/png",
+        }
+        ct = content_types.get(safe.suffix, "application/octet-stream")
+
+        with open(safe, "rb") as f:
+            data = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    global _config_ini_path
+
+    parser = argparse.ArgumentParser(description="OptimusPy Workflow UI")
+    parser.add_argument('--port', type=int, default=DEFAULT_PORT,
+                        help=f"Port to listen on (default: {DEFAULT_PORT})")
+    parser.add_argument('--config', dest='config_ini', default=DEFAULT_CONFIG_INI,
+                        help=f"Path to TM1 connection config.ini (default: {DEFAULT_CONFIG_INI})")
+    args = parser.parse_args()
+
+    _config_ini_path = args.config_ini
+
+    # Only change CWD for frozen exe — pip/script users expect CWD-relative paths
+    if getattr(sys, 'frozen', False):
+        set_current_directory()
+
+    # Configure logging
+    logging.basicConfig(
+        format="%(asctime)s - optimuspy-ui - %(levelname)s - %(message)s",
+        level=logging.INFO,
+        stream=sys.stdout,
+    )
+
+    server = HTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
+    url = f"http://127.0.0.1:{args.port}"
+
+    print(f"\n  OptimusPy Workflow UI")
+    print(f"  {'─' * 40}")
+    print(f"  URL:        {url}")
+    print(f"  Config:     {_config_ini_path}")
+    print(f"  Press Ctrl+C to stop\n")
+
+    # Auto-open browser
+    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  Shutting down...")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

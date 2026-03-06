@@ -9,20 +9,26 @@ OptimusPy is a CLI tool that finds the ideal dimension order for IBM TM1/Plannin
 ## Running
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install as editable package (recommended for development)
+pip install -e .
 
-# Optimize mode — benchmark dimension orders using greedy algorithm
+# Run via console script (after pip install)
+optimuspy optimize samples/optimize.json
+optimuspy set samples/set_order.json
+optimuspy scan --instance tm1srv01
+
+# Run as Python module
+python -m optimuspy optimize samples/optimize.json
+
+# Run as script (backward compat, no pip install needed)
 python optimuspy.py optimize samples/optimize.json
 
-# Optimize mode — test only predefined orders
-python optimuspy.py optimize samples/optimize_predefined.json
-
-# Set mode — apply a specific dimension order directly
-python optimuspy.py set samples/set_order.json
+# Web UI
+python -m optimuspy.ui
+python ui.py  # backward compat
 
 # With custom config.ini path and password override
-python optimuspy.py optimize cubes/sales.json --config config/production.ini -p "mypass"
+optimuspy optimize cubes/sales.json --config config/production.ini -p "mypass"
 ```
 
 There are no tests in this project. The tool requires a live TM1 server to execute.
@@ -30,10 +36,10 @@ There are no tests in this project. The tool requires a live TM1 server to execu
 ### CLI
 
 ```
-python optimuspy.py <mode> <cube_config.json> [--config CONFIG_INI] [-p PASSWORD]
+optimuspy <mode> <cube_config.json> [--config CONFIG_INI] [-p PASSWORD]
 ```
 
-- `mode` — `optimize` (benchmark orders) or `set` (apply a specific order)
+- `mode` — `optimize` (benchmark orders), `set` (apply a specific order), or `scan` (discover candidates)
 - `cube_config.json` — JSON file with cube-specific settings (see `samples/`)
 - `--config` — path to TM1 connection config.ini (default: `config/config.ini`)
 - `-p` — TM1 password override
@@ -44,7 +50,7 @@ Each cube gets its own JSON config file. See `samples/` for examples. Key fields
 
 - `instance` — TM1 instance name (must match a section in config.ini)
 - `cube` — cube name to optimize
-- `views` — list of view names to benchmark (multi-view supported)
+- `views` — list of view names to benchmark (optional, multi-view supported). Omit for RAM-only optimization
 - `processes` — list of TI process names to benchmark (optional, multi-process supported)
 - `predefined_orders` — list of dimension orders to test; if set, skips the greedy algorithm
 - `orders_to_ignore` — list of dimension orders to skip (ignored when `predefined_orders` is set)
@@ -52,29 +58,47 @@ Each cube gets its own JSON config file. See `samples/` for examples. Key fields
 
 ## Build
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) builds a Windows executable on push to master:
-- Uses PyInstaller with `optimuspy.spec`
-- Publishes the `.exe` to GitHub Releases automatically
-- The spec file bundles `execution_mode.py`, `executors.py`, and `results.py` as data files with hidden imports
+The GitHub Actions workflow (`.github/workflows/build.yml`) builds Windows and Linux executables on push to master:
+- Installs the package via `pip install -e .` then PyInstaller
+- Uses `optimuspy.spec` which references `__main__.py` as entry point and `src/` as pathex
+- Publishes executables to GitHub Releases automatically
 
-To build locally: `pyinstaller optimuspy.spec`
+To build locally: `pip install -e . && pip install pyinstaller && pyinstaller optimuspy.spec`
 
 ## Architecture
 
-The project is a flat 4-file Python application (no package structure):
+The project uses a `src/optimuspy/` package layout (matching rushti's structure):
 
-- **`optimuspy.py`** — Entry point. Parses CLI args (mode + JSON config path), loads and validates JSON config, reads `config/config.ini` for TM1 connection params. `_execute_set_mode` applies a dimension order directly. `_execute_optimize_mode` orchestrates benchmarking: captures original order, runs permutations via executors, determines best result, optionally updates the cube, and writes output (CSV/XLSX/PNG).
-- **`executors.py`** — Core benchmarking logic. `OptipyzerExecutor` is the base class that handles query timing across multiple views, process timing across multiple processes, RAM retrieval, and cache clearing. `OriginalOrderExecutor` benchmarks the current dimension order. `MainExecutor` implements the greedy permutation strategy with `orders_to_ignore` filtering. `PredefinedOrderExecutor` benchmarks a provided list of dimension orders.
-- **`results.py`** — `ExecutionContext` tracks mutable state (counter, RAM) across permutation evaluations. `PermutationResult` stores timing/RAM data for a single permutation with composite metrics (median-of-medians across views/processes). `OptimusResult` aggregates results, determines best via progressive threshold matching (1%, 2.5%, 5% of range), and outputs CSV/XLSX/PNG.
-- **`execution_mode.py`** — `ExecutionMode` enum (`ORIGINAL_ORDER`, `ITERATIONS`, `RESULT`) with a `label` property for display strings.
+```
+src/optimuspy/
+├── __init__.py        # Version + public API re-exports
+├── cli.py             # CLI entry point (console_scripts target)
+├── core.py            # Business logic: main(), _scan_to_data(), config helpers
+├── executors.py       # Benchmarking: greedy, predefined, position, dimension executors
+├── results.py         # ExecutionContext, PermutationResult, OptimusResult + output
+├── execution_mode.py  # ExecutionMode enum
+├── checkpoint.py      # CheckpointManager for resume support
+├── ui.py              # Web UI server (HTTP + SSE)
+└── images/            # UI assets (logo.png, logo.svg)
+```
+
+Root-level shims (`optimuspy.py`, `ui.py`) provide backward compatibility for `python optimuspy.py` usage. `__main__.py` is the PyInstaller entry point.
+
+- **`cli.py`** — CLI entry point. Parses args (mode + JSON config), dispatches to `core.main()` or `core._execute_scan_mode()`. Only calls `set_current_directory()` for frozen exe.
+- **`core.py`** — Business logic. `main()` orchestrates benchmarking: captures original order, runs permutations via executors, determines best result, optionally updates the cube, writes output (CSV/XLSX/HTML). `_scan_to_data()` returns structured scan results with dimension intelligence.
+- **`executors.py`** — Core benchmarking logic. `OptipyzerExecutor` base class handles query timing, process timing, RAM retrieval, and cache clearing. Subclasses: `OriginalOrderExecutor`, `MainExecutor` (greedy), `PredefinedOrderExecutor`, `PositionOptimizerExecutor`, `DimensionOptimizerExecutor`.
+- **`results.py`** — `ExecutionContext` tracks mutable state. `PermutationResult` stores timing/RAM data with composite metrics. `OptimusResult` aggregates results and outputs CSV/XLSX/PNG/HTML.
+- **`execution_mode.py`** — `ExecutionMode` enum (`ORIGINAL_ORDER`, `ITERATIONS`, `RESULT`).
+- **`ui.py`** — Lightweight local web interface for the scan→optimize→set workflow. HTTP server on `127.0.0.1:8765`, single-page HTML app with REST API, SSE streaming for live progress.
 
 ## Key Patterns
 
+- **Package imports**: All internal imports use absolute package paths: `from optimuspy.results import ...`
 - **TM1 connection**: Configured via `config/config.ini` sections (INI format). Each section is a TM1 instance. Connection params are passed directly to `TM1Service(**config[instance_name])`.
 - **VMM/VMT handling**: Before benchmarking, VMM/VMT values are set to 1,000,000 to prevent memory-based optimizations from interfering, then restored in a `finally` block.
-- **ExecutionContext**: Tracks `counter`, `current_ram`, and `original_ram` as instance state passed through the executor pipeline. Replaces the old class-level mutable state on `PermutationResult`.
-- **Composite metrics**: `composite_query_time()` and `composite_process_time()` compute median-of-medians across all views/processes. Used by `MainExecutor` for greedy selection and `OptimusResult.determine_best_result()` for threshold matching.
-- **Predefined vs greedy**: If `predefined_orders` is set in JSON config, `PredefinedOrderExecutor` tests only those orders. Otherwise, `MainExecutor` runs the greedy outside-in algorithm. `orders_to_ignore` is only used by `MainExecutor` (ignored when `predefined_orders` is set).
+- **ExecutionContext**: Tracks `counter`, `current_ram`, and `original_ram` as instance state passed through the executor pipeline.
+- **Composite metrics**: `composite_query_time()` and `composite_process_time()` compute median-of-medians across all views/processes.
+- **Predefined vs greedy**: If `predefined_orders` is set, `PredefinedOrderExecutor` tests only those orders. Otherwise, `MainExecutor` runs the greedy outside-in algorithm.
 - **String element constraint**: Dimensions with string elements cannot be swapped to the last (measure) position in TM1.
 - **Output files** go to `results/` directory, named with pattern `{cube}_{timestamp}`.
-- **Frozen exe detection**: `set_current_directory()` handles both script and PyInstaller-frozen exe contexts for working directory resolution.
+- **CWD handling**: `set_current_directory()` only runs for PyInstaller-frozen exe. For pip/script usage, paths resolve relative to user's CWD.

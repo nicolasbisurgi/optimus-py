@@ -1,16 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
 import sys
+from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = ['seaborn', 'execution_mode', 'executors', 'results', 'checkpoint']
-if sys.platform == 'win32':
-    hiddenimports.append('win32timezone')
+# Package directory — use absolute path
+src_dir = Path("src").resolve()
+
+# Collect all optimuspy submodules
+optimuspy_imports = collect_submodules('optimuspy')
 
 a = Analysis(
-    ['optimuspy.py'],
-    pathex=[],
+    ['__main__.py'],
+    pathex=[str(src_dir)],
     binaries=[],
-    datas=[('execution_mode.py', '.'), ('executors.py', '.'), ('results.py', '.'), ('checkpoint.py', '.')],
-    hiddenimports=hiddenimports,
+    datas=[
+        (str(src_dir / 'optimuspy' / 'static'), 'optimuspy/static'),
+        (str(src_dir / 'optimuspy' / 'images'), 'optimuspy/images'),
+    ],
+    hiddenimports=optimuspy_imports + [
+        'TM1py.Objects',
+        'TM1py.Objects.Element',
+        'TM1py.Objects.Cube',
+        'TM1py.Objects.Dimension',
+        'TM1py.Objects.Process',
+        'TM1py.Exceptions',
+        'win32timezone',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

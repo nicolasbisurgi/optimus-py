@@ -91,6 +91,23 @@ v2.0 removes that limitation. You can now specify **multiple views and multiple 
 
 For each dimension order, OptimusPy runs all views and all processes, then computes a **composite metric** (median of medians) that reflects overall performance across your workload. This gives you a much more realistic picture of how a dimension order will perform in the real world, where cubes serve many consumers.
 
+**Both views and processes are optional.** You can run OptimusPy in three modes depending on what you want to optimize:
+
+- **RAM only** — omit both `views` and `processes`. OptimusPy measures only the RAM impact of each dimension order. This is the fastest mode.
+- **RAM + Views** — include `views` only. Benchmarks query performance alongside RAM.
+- **RAM + Views + Processes** — include both. Full benchmark across queries, TI processes, and RAM.
+
+```json
+{
+  "instance": "tm1srv01",
+  "cube": "Sales",
+  "executions": 5,
+  "output": "csv"
+}
+```
+
+The above config runs RAM-only optimization — no views, no processes.
+
 ---
 
 ## 5. Targeted Optimization — Position and Dimension
@@ -169,7 +186,7 @@ optimuspy scan --instance tm1srv01       # Discover optimization candidates
 |-------|------|----------|-------------|
 | `instance` | string | Yes | TM1 instance name (must match a section in config.ini) |
 | `cube` | string | Yes | Cube name to optimize |
-| `views` | list | Yes | View names to benchmark (supports multiple) |
+| `views` | list | No | View names to benchmark (supports multiple). Omit for RAM-only optimization |
 | `executions` | int | Yes | Number of executions per permutation |
 | `output` | string | Yes | Output format: `"csv"` or `"xlsx"` |
 | `processes` | list | No | TI process names to benchmark (supports multiple) |
@@ -261,8 +278,8 @@ The blob is named `optimuspy_checkpoint_{cube}.json` and uses the same TM1 conne
 | Feature | Greedy | Predefined | Position | Dimension | Set | Scan |
 |---------|:------:|:----------:|:--------:|:---------:|:---:|:----:|
 | Benchmarking | Yes | Yes | Yes | Yes | — | — |
-| Multi-view | Yes | Yes | Yes | Yes | — | — |
-| Multi-process | Yes | Yes | Yes | Yes | — | — |
+| Multi-view (optional) | Yes | Yes | Yes | Yes | — | — |
+| Multi-process (optional) | Yes | Yes | Yes | Yes | — | — |
 | Fast mode | Yes | — | — | — | — | — |
 | dimensions_to_exclude | Yes | — | Yes | — | — | — |
 | orders_to_ignore | Yes | — | — | — | — | — |
