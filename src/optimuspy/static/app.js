@@ -21,6 +21,7 @@ const OptimusPy = (function () {
 
     // Scan
     scanData: null,
+    scanTimestamp: null,  // Date.now() when last scan completed
 
     // Cubes & configs
     savedCubes: [],
@@ -40,30 +41,30 @@ const OptimusPy = (function () {
   // Icons (inline SVG strings — Lucide style)
   // ==================================================================
   const Icons = {
-    x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-    check: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
-    alertTriangle: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-    info: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
-    chevronRight: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
-    chevronLeft: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
-    arrowRight: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
-    arrowLeft: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
-    play: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
-    download: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
-    refresh: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>',
-    trash: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>',
-    search: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
-    zap: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
-    sun: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
-    moon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>',
-    monitor: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
-    externalLink: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
-    gripVertical: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/></svg>',
-    lock: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>',
-    unlock: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 019.9-1"/></svg>',
-    rotateCcw: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>',
-    square: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    x: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+    check: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    alertTriangle: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    info: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    chevronRight: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+    chevronLeft: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
+    arrowRight: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
+    arrowLeft: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
+    play: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+    download: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    refresh: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>',
+    trash: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>',
+    search: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    zap: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    sun: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+    moon: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>',
+    monitor: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    externalLink: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+    gripVertical: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/></svg>',
+    lock: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>',
+    unlock: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 019.9-1"/></svg>',
+    rotateCcw: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>',
+    square: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>',
+    plus: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
   };
 
   // ==================================================================
@@ -85,6 +86,12 @@ const OptimusPy = (function () {
       if (typeof c === "string") e.appendChild(document.createTextNode(c));
       else e.appendChild(c);
     });
+    // Keyboard activation for non-button elements with role="button"
+    if (attrs && attrs.role === "button" && tag !== "button") {
+      e.addEventListener("keydown", ev => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); e.click(); }
+      });
+    }
     return e;
   }
   function formatBytes(bytes) {
@@ -101,6 +108,59 @@ const OptimusPy = (function () {
     const s = Math.floor(seconds % 60);
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   }
+  // ---- Scan cache (localStorage, keyed by instance) ----
+  const ScanCache = {
+    _key(instance) { return `op-scan-${instance}`; },
+    save(instance, scanData) {
+      const entry = { data: scanData, ts: Date.now() };
+      try { localStorage.setItem(this._key(instance), JSON.stringify(entry)); } catch { /* quota */ }
+    },
+    load(instance) {
+      try {
+        const raw = localStorage.getItem(this._key(instance));
+        if (!raw) return null;
+        const entry = JSON.parse(raw);
+        // Expire after 24 hours
+        if (Date.now() - entry.ts > 86400000) { this.clear(instance); return null; }
+        return entry;
+      } catch { return null; }
+    },
+    clear(instance) {
+      try { localStorage.removeItem(this._key(instance)); } catch { /* */ }
+    },
+    formatAge(ts) {
+      if (!ts) return "";
+      const mins = Math.floor((Date.now() - ts) / 60000);
+      if (mins < 1) return "just now";
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs}h ago`;
+      return `${Math.floor(hrs / 24)}d ago`;
+    },
+  };
+
+  // ---- Cube intelligence cache (localStorage, keyed by instance+cube) ----
+  const IntelCache = {
+    _key(instance, cube) { return `op-intel-${instance}-${cube}`; },
+    save(instance, cube, data) {
+      const entry = { data, ts: Date.now() };
+      try { localStorage.setItem(this._key(instance, cube), JSON.stringify(entry)); } catch { /* quota */ }
+    },
+    load(instance, cube) {
+      try {
+        const raw = localStorage.getItem(this._key(instance, cube));
+        if (!raw) return null;
+        const entry = JSON.parse(raw);
+        // Expire after 7 days
+        if (Date.now() - entry.ts > 7 * 86400000) { this.clear(instance, cube); return null; }
+        return entry;
+      } catch { return null; }
+    },
+    clear(instance, cube) {
+      try { localStorage.removeItem(this._key(instance, cube)); } catch { /* */ }
+    },
+  };
+
   function escapeHtml(str) {
     const d = document.createElement("div");
     d.textContent = str;
@@ -174,6 +234,11 @@ const OptimusPy = (function () {
         closeBtn,
       );
       closeBtn.addEventListener("click", (e) => { e.stopPropagation(); this._remove(t); });
+      // Clicking anywhere on an error toast also dismisses it
+      if (type === "error") {
+        t.style.cursor = "pointer";
+        t.addEventListener("click", () => this._remove(t));
+      }
       this._container.appendChild(t);
       if (duration > 0) setTimeout(() => this._remove(t), duration);
       return id;
@@ -204,29 +269,54 @@ const OptimusPy = (function () {
   const Modal = {
     _backdrop: null,
     _container: null,
+    _previousFocus: null,
 
     init() {
       this._backdrop = $("#modal-backdrop");
       this._container = $("#modal-container");
       this._backdrop.addEventListener("click", () => this.close());
       document.addEventListener("keydown", e => {
-        if (e.key === "Escape" && !this._container.classList.contains("hidden")) this.close();
+        if (this._container.classList.contains("hidden")) return;
+        if (e.key === "Escape") { this.close(); return; }
+        // Focus trap: Tab / Shift+Tab within modal
+        if (e.key === "Tab") {
+          const focusable = this._container.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+          } else {
+            if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+          }
+        }
       });
     },
 
     open({ title, body, footer, size = "md" }) {
+      this._previousFocus = document.activeElement;
+      const titleId = "modal-title-id";
       const m = el("div", { className: `modal ${size}` },
         el("div", { className: "modal-header" },
-          el("h3", { className: "modal-title" }, title),
-          el("button", { className: "modal-close", html: Icons.x, onClick: () => this.close() }),
+          el("h2", { className: "modal-title", id: titleId }, title),
+          el("button", { className: "modal-close", html: Icons.x, onClick: () => this.close() },
+            el("span", { className: "sr-only" }, "Close")),
         ),
         el("div", { className: "modal-body" }, ...(typeof body === "string" ? [el("p", null, body)] : [body])),
       );
       if (footer) m.appendChild(el("div", { className: "modal-footer" }, ...footer));
       this._container.innerHTML = "";
       this._container.appendChild(m);
+      this._container.setAttribute("aria-labelledby", titleId);
       this._backdrop.classList.remove("hidden");
       this._container.classList.remove("hidden");
+      // Move focus into modal
+      const firstFocusable = m.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (firstFocusable) requestAnimationFrame(() => firstFocusable.focus());
     },
 
     confirm(message, onConfirm) {
@@ -245,6 +335,11 @@ const OptimusPy = (function () {
       this._backdrop.classList.add("hidden");
       this._container.classList.add("hidden");
       this._container.innerHTML = "";
+      // Restore focus to trigger element
+      if (this._previousFocus && typeof this._previousFocus.focus === "function") {
+        this._previousFocus.focus();
+        this._previousFocus = null;
+      }
     },
   };
 
@@ -264,10 +359,9 @@ const OptimusPy = (function () {
       this.apply();
     },
     apply() {
-      const html = document.documentElement;
-      if (state.theme === "dark") html.setAttribute("data-theme", "dark");
-      else if (state.theme === "light") html.setAttribute("data-theme", "light");
-      else html.removeAttribute("data-theme");
+      // Always resolve to explicit light/dark so CSS only needs [data-theme="dark"]
+      const resolved = this.current();
+      document.documentElement.setAttribute("data-theme", resolved);
     },
     current() {
       if (state.theme !== "system") return state.theme;
@@ -376,9 +470,8 @@ const OptimusPy = (function () {
           if (col.align === "right") td.classList.add("align-right");
           if (col.render) {
             const content = col.render(row, idx);
-            if (typeof content === "string") td.innerHTML = content;
-            else if (content instanceof HTMLElement) td.appendChild(content);
-            else td.textContent = content != null ? content : "";
+            if (content instanceof HTMLElement) td.appendChild(content);
+            else td.textContent = content != null ? String(content) : "";
           } else {
             const v = col.value ? col.value(row) : row[col.key];
             td.textContent = v != null ? v : "";
@@ -460,8 +553,8 @@ const OptimusPy = (function () {
 
       // Center arrows
       const actions = el("div", { className: "transfer-actions" });
-      const addBtn = el("button", { className: "transfer-btn", title: "Add selected", html: Icons.chevronRight, onClick: moveRight });
-      const removeBtn = el("button", { className: "transfer-btn", title: "Remove selected", html: Icons.chevronLeft, onClick: moveLeft });
+      const addBtn = el("button", { className: "transfer-btn", title: "Add selected", "aria-label": "Add selected", html: Icons.chevronRight, onClick: moveRight });
+      const removeBtn = el("button", { className: "transfer-btn", title: "Remove selected", "aria-label": "Remove selected", html: Icons.chevronLeft, onClick: moveLeft });
       actions.appendChild(addBtn);
       actions.appendChild(removeBtn);
 
@@ -606,6 +699,10 @@ const OptimusPy = (function () {
       if (showLock) {
         const lockBtn = el("span", {
           className: `dim-card-lock${dim.locked ? " locked" : ""}`,
+          role: "button",
+          tabindex: "0",
+          "aria-label": dim.locked ? "Unlock dimension" : "Lock dimension in place",
+          "aria-pressed": dim.locked ? "true" : "false",
           html: dim.locked ? Icons.lock : Icons.unlock,
           title: dim.locked ? "Locked — will not be moved" : "Click to lock in place",
         });
@@ -844,7 +941,7 @@ const OptimusPy = (function () {
         nameSpan.appendChild(el("span", { className: "badge" }, rule.dimension));
         nameSpan.appendChild(document.createTextNode(` \u2014 ${label}`));
         row.appendChild(nameSpan);
-        const removeBtn = el("span", { className: "selection-row-remove", html: Icons.x, title: "Remove" });
+        const removeBtn = el("span", { className: "selection-row-remove", role: "button", tabindex: "0", "aria-label": "Remove", html: Icons.x, title: "Remove" });
         removeBtn.addEventListener("click", () => { _positionRules.splice(ri, 1); fire(); render(); });
         row.appendChild(removeBtn);
         rulesList.appendChild(row);
@@ -871,7 +968,7 @@ const OptimusPy = (function () {
           badges.appendChild(el("span", { className: "badge" }, `${pi + 1}. ${name}`));
         });
         row.appendChild(badges);
-        const removeBtn = el("span", { className: "selection-row-remove", html: Icons.x, title: "Remove" });
+        const removeBtn = el("span", { className: "selection-row-remove", role: "button", tabindex: "0", "aria-label": "Remove", html: Icons.x, title: "Remove" });
         removeBtn.addEventListener("click", () => { _ignoreOrders.splice(oi, 1); fire(); render(); });
         row.appendChild(removeBtn);
         ignoreList.appendChild(row);
@@ -900,7 +997,7 @@ const OptimusPy = (function () {
           badges.appendChild(el("span", { className: "badge" }, `${pi + 1}. ${name}`));
         });
         row.appendChild(badges);
-        const removeBtn = el("span", { className: "selection-row-remove", html: Icons.x, title: "Remove" });
+        const removeBtn = el("span", { className: "selection-row-remove", role: "button", tabindex: "0", "aria-label": "Remove", html: Icons.x, title: "Remove" });
         removeBtn.addEventListener("click", () => { _predefinedOrders.splice(oi, 1); fire(); render(); });
         row.appendChild(removeBtn);
         orderList.appendChild(row);
@@ -1186,17 +1283,61 @@ const OptimusPy = (function () {
         sidebar.classList.toggle("collapsed");
         state.sidebarCollapsed = sidebar.classList.contains("collapsed");
         localStorage.setItem("op-sidebar", state.sidebarCollapsed ? "collapsed" : "expanded");
+        collapseBtn.setAttribute("aria-expanded", String(!state.sidebarCollapsed));
+        collapseBtn.setAttribute("aria-label", state.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar");
+      });
+      // Sync initial aria-expanded state
+      if (state.sidebarCollapsed) {
+        collapseBtn.setAttribute("aria-expanded", "false");
+        collapseBtn.setAttribute("aria-label", "Expand sidebar");
+      }
+
+      // Mobile menu button & overlay
+      const mobileMenuBtn = $("#mobileMenuBtn");
+      const sidebarOverlay = $("#sidebarOverlay");
+      const _closeMobileSidebar = () => {
+        sidebar.classList.remove("mobile-open");
+        sidebarOverlay.classList.remove("visible");
+        mobileMenuBtn.setAttribute("aria-expanded", "false");
+      };
+      const _openMobileSidebar = () => {
+        sidebar.classList.add("mobile-open");
+        sidebarOverlay.classList.add("visible");
+        mobileMenuBtn.setAttribute("aria-expanded", "true");
+      };
+      if (mobileMenuBtn) {
+        mobileMenuBtn.addEventListener("click", () => {
+          if (sidebar.classList.contains("mobile-open")) _closeMobileSidebar();
+          else _openMobileSidebar();
+        });
+      }
+      if (sidebarOverlay) {
+        sidebarOverlay.addEventListener("click", _closeMobileSidebar);
+      }
+      // Close mobile sidebar on nav link click
+      $$(".nav-item, .nav-sub-item").forEach(link => {
+        link.addEventListener("click", () => {
+          if (window.innerWidth < 768) _closeMobileSidebar();
+        });
       });
 
       // Instance switcher
       const switcherBtn = $("#instanceSwitcherBtn");
       const dropdown = $("#instanceDropdown");
+      const _toggleDropdown = (show) => {
+        const isHidden = typeof show === "boolean" ? !show : !dropdown.classList.contains("hidden");
+        dropdown.classList.toggle("hidden", isHidden);
+        switcherBtn.setAttribute("aria-expanded", String(!isHidden));
+      };
       switcherBtn.addEventListener("click", () => {
         if (switcherBtn.disabled) return;
-        dropdown.classList.toggle("hidden");
+        _toggleDropdown();
+      });
+      document.addEventListener("keydown", e => {
+        if (e.key === "Escape" && !dropdown.classList.contains("hidden")) _toggleDropdown(false);
       });
       document.addEventListener("click", e => {
-        if (!e.target.closest("#instanceSwitcher")) dropdown.classList.add("hidden");
+        if (!e.target.closest("#instanceSwitcher")) _toggleDropdown(false);
       });
     },
 
@@ -1222,10 +1363,20 @@ const OptimusPy = (function () {
         const isActive = name === state.activeInstance && state.connected;
         const item = el("div", {
           className: `instance-dropdown-item${isActive ? " active connected" : ""}`,
+          role: "option",
+          "aria-selected": isActive ? "true" : "false",
+          tabindex: "0",
           onClick: () => {
             dropdown.classList.add("hidden");
-            if (isActive) return; // Already connected to this one
+            btn.setAttribute("aria-expanded", "false");
+            if (isActive) return;
             this._promptConnect(name);
+          },
+          onKeydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              item.click();
+            }
           },
         },
           el("span", { className: "dot" }),
@@ -1258,18 +1409,25 @@ const OptimusPy = (function () {
           state.password = pw;
           state.connected = true;
           state.serverName = resp.server_name;
-          // Reset cached data from previous instance
-          state.scanData = null;
+          // Reset cached data from previous instance, restore scan cache if available
           state.cubeMetadata = {};
           state.cubeViews = {};
           state.processes = [];
+          const cached = ScanCache.load(instanceName);
+          if (cached) {
+            state.scanData = cached.data;
+            state.scanTimestamp = cached.ts;
+          } else {
+            state.scanData = null;
+            state.scanTimestamp = null;
+          }
           Modal.close();
           this.renderInstanceSwitcher();
           Sidebar.loadSavedCubes();
           Sidebar.updateActivityMonitor();
           Toast.success(`Connected to ${resp.server_name}`);
-          // Re-render current page
-          Router._resolve();
+          // Navigate to the split-panel navigation page
+          Router.navigate("#/nav");
         } catch (err) {
           Toast.error(err.message);
           connectBtn.disabled = false;
@@ -1299,37 +1457,9 @@ const OptimusPy = (function () {
     },
 
     renderScannedCubes() {
+      // Cube list now lives in the NavPage left panel — clear sidebar sub-items
       const nav = $("#savedCubesNav");
-      nav.innerHTML = "";
-      // Only show cubes when connected to an instance
-      if (!state.connected) return;
-      // Show saved cubes for the active instance
-      state.savedCubes
-        .filter(sc => sc.instance === state.activeInstance)
-        .forEach(sc => {
-          const a = el("a", {
-            className: "nav-sub-item",
-            href: `#/cube/${encodeURIComponent(sc.cube)}`,
-          },
-            el("span", { className: "sub-dot" }),
-            el("span", null, sc.cube),
-          );
-          nav.appendChild(a);
-        });
-      // Then scanned cubes (not already in saved)
-      const savedNames = new Set(state.savedCubes.map(sc => sc.cube));
-      const candidates = state.scanData?.candidates || [];
-      candidates.forEach(c => {
-        if (savedNames.has(c.cube_name)) return;
-        const a = el("a", {
-          className: "nav-sub-item",
-          href: `#/cube/${encodeURIComponent(c.cube_name)}`,
-        },
-          el("span", { className: "sub-dot" }),
-          el("span", null, c.cube_name),
-        );
-        nav.appendChild(a);
-      });
+      if (nav) nav.innerHTML = "";
     },
 
     async updateActivityMonitor() {
@@ -1377,7 +1507,18 @@ const OptimusPy = (function () {
     },
 
     init() {
-      window.addEventListener("hashchange", () => this._resolve());
+      window.addEventListener("hashchange", () => {
+        // Close mobile sidebar on navigation
+        if (window.innerWidth < 768) {
+          const sidebar = $("#sidebar");
+          const overlay = $("#sidebarOverlay");
+          const menuBtn = $("#mobileMenuBtn");
+          if (sidebar) sidebar.classList.remove("mobile-open");
+          if (overlay) overlay.classList.remove("visible");
+          if (menuBtn) menuBtn.setAttribute("aria-expanded", "false");
+        }
+        this._resolve();
+      });
       this._resolve();
     },
 
@@ -1399,14 +1540,23 @@ const OptimusPy = (function () {
       const segments = path.split("/").filter(Boolean);
       let pageName, params = {};
 
+      // Route: #/cube/CubeName?tab=x → redirect to #/nav?cube=CubeName&tab=x
       if (segments[0] === "cube" && segments[1]) {
-        pageName = "cube-workspace";
-        params.cubeName = decodeURIComponent(segments[1]);
+        const cubeName = decodeURIComponent(segments[1]);
+        const tabParam = query.tab ? `&tab=${query.tab}` : "";
+        window.location.hash = `#/nav?cube=${encodeURIComponent(cubeName)}${tabParam}`;
+        return;
+      }
+
+      // Route: #/nav?cube=X&tab=Y
+      if (segments[0] === "nav") {
+        pageName = "nav";
+        if (query.cube) params.cubeName = query.cube;
       } else {
         pageName = segments[0] || "home";
       }
 
-      // Unmount current (skip if staying on same page module, e.g. tab switch within CubeWorkspace)
+      // Unmount current (skip if staying on same page module)
       const stayingSamePage = this._current === pageName;
       if (this._current && this._pages[this._current] && !stayingSamePage) {
         const mod = this._pages[this._current];
@@ -1423,11 +1573,11 @@ const OptimusPy = (function () {
         const href = a.getAttribute("href");
         if (!href) return;
         const page = a.dataset.page;
-        a.classList.toggle("active", page === pageName || (pageName === "cube-workspace" && page === "cubes"));
+        a.classList.toggle("active", page === pageName || pageName === "nav" && page === "home");
       });
 
       // Update title
-      const titles = { home: "Home", cubes: "Cubes", "cube-workspace": params.cubeName || "Cube", results: "Results", jobs: "Jobs", settings: "Settings" };
+      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings" };
       document.title = `OptimusPy — ${titles[pageName] || "Dashboard"}`;
 
       // Mount
@@ -1442,91 +1592,250 @@ const OptimusPy = (function () {
   // Page: Home
   // ==================================================================
   const HomePage = {
+    _ramThreshold: 60,
+    _includeOptimized: false,
+
     mount() {
       const page = $("#page-home");
       page.innerHTML = "";
 
       if (!state.connected) {
-        // Not connected — show prompt to select instance from sidebar
-        page.appendChild(el("div", { className: "empty-state", style: "padding-top:80px" },
-          el("div", { className: "empty-state-icon", html: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>' }),
-          el("div", { className: "empty-state-title" }, "Select an instance to get started"),
-          el("div", { className: "empty-state-text" }, "Use the instance switcher in the sidebar to connect to a TM1 server."),
+        this._renderDisconnected(page);
+      } else {
+        // Connected — redirect to the navigation split-panel view
+        Router.navigate("#/nav");
+      }
+    },
+
+    // ---- Not connected: instance tiles + collapsible help ----
+    _renderDisconnected(page) {
+      page.appendChild(el("div", { className: "page-header" },
+        el("h1", { className: "page-title" }, "OptimusPy"),
+        el("p", { className: "page-subtitle" }, "Connect to a TM1 instance to get started"),
+      ));
+
+      if (state.instances.length > 0) {
+        const tilesGrid = el("div", { className: "instance-tiles" });
+        state.instances.forEach(name => {
+          const tile = el("button", {
+            className: "instance-tile",
+            onClick: () => Sidebar._promptConnect(name),
+          },
+            el("div", { className: "instance-tile-icon", html: '<svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>' }),
+            el("div", { className: "instance-tile-name" }, name),
+            el("div", { className: "instance-tile-hint" }, "Click to connect"),
+          );
+          tilesGrid.appendChild(tile);
+        });
+        page.appendChild(tilesGrid);
+      } else {
+        page.appendChild(el("div", { className: "empty-state" },
+          el("div", { className: "empty-state-icon", html: '<svg aria-hidden="true" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>' }),
+          el("div", { className: "empty-state-title" }, "No instances configured"),
+          el("div", { className: "empty-state-text" }, "Add TM1 server connections to config.ini to get started."),
         ));
-        page.appendChild(this._buildGuideContent());
+      }
+
+      // Collapsible help section
+      page.appendChild(this._buildCollapsibleHelp());
+    },
+
+    // ---- Connected: auto-scan cube cards ----
+    _renderConnected(page) {
+      // Header with instance info + rescan
+      const header = el("div", { className: "page-header", style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px" });
+      header.appendChild(el("div", null,
+        el("h1", { className: "page-title" }, state.serverName || state.activeInstance),
+        el("p", { className: "page-subtitle" }, `${state.activeInstance} — ${state.savedCubes.length} saved cube${state.savedCubes.length !== 1 ? "s" : ""}`),
+      ));
+      const headerActions = el("div", { className: "flex gap-2 items-center" });
+      const helpBtn = el("button", {
+        className: "btn btn-ghost btn-sm",
+        "aria-label": "Tips & help",
+        onClick: () => this._showHelpDrawer(),
+      }, el("span", { html: Icons.info }), "Help");
+      headerActions.appendChild(helpBtn);
+      header.appendChild(headerActions);
+      page.appendChild(header);
+
+      // Filter bar
+      const filterBar = el("div", { className: "cube-filter-bar" });
+      // RAM threshold slider
+      const ramGroup = el("div", { className: "cube-filter-group" });
+      ramGroup.appendChild(el("label", { className: "cube-filter-label" }, "RAM Threshold"));
+      const ramRow = el("div", { className: "flex items-center gap-2" });
+      const ramSlider = el("input", { type: "range", min: "0", max: "100", value: String(this._ramThreshold), style: "width:120px" });
+      const ramValue = el("span", { className: "cube-filter-value" }, this._ramThreshold + "%");
+      ramSlider.addEventListener("input", () => {
+        this._ramThreshold = parseInt(ramSlider.value);
+        ramValue.textContent = this._ramThreshold + "%";
+      });
+      // Don't auto-scan on slider change — user clicks Rescan when ready
+      ramRow.appendChild(ramSlider);
+      ramRow.appendChild(ramValue);
+      ramGroup.appendChild(ramRow);
+      filterBar.appendChild(ramGroup);
+      // Include optimized toggle
+      const optLabel = el("label", { className: "cube-filter-group checkbox-label", style: "cursor:pointer" });
+      const optCb = el("input", { type: "checkbox" });
+      optCb.checked = this._includeOptimized;
+      optCb.addEventListener("change", () => { this._includeOptimized = optCb.checked; });
+      optLabel.appendChild(optCb);
+      optLabel.appendChild(document.createTextNode(" Include optimized"));
+      filterBar.appendChild(optLabel);
+      // Rescan button
+      const rescanBtn = el("button", { className: "btn btn-ghost btn-sm", id: "home-rescan-btn", onClick: () => this._rescan(page) },
+        el("span", { html: Icons.refresh }), "Rescan");
+      filterBar.appendChild(rescanBtn);
+      page.appendChild(filterBar);
+
+      // Cubes container
+      const cubesContainer = el("div", { id: "home-cubes-container" });
+      page.appendChild(cubesContainer);
+
+      // Auto-scan if no data yet, otherwise render existing
+      if (state.scanData) {
+        this._renderCubeCards(cubesContainer);
+      } else {
+        this._autoScan(cubesContainer);
+      }
+    },
+
+    async _autoScan(container) {
+      this._showScanLoading(container);
+      try {
+        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
+        state.scanData = data;
+        Sidebar.renderScannedCubes();
+        container.innerHTML = "";
+        this._renderCubeCards(container);
+      } catch (err) {
+        container.innerHTML = "";
+        container.appendChild(el("div", { className: "empty-state" },
+          el("div", { className: "empty-state-title" }, "Scan failed"),
+          el("div", { className: "empty-state-text" }, err.message),
+          el("div", { className: "empty-state-action" },
+            el("button", { className: "btn btn-primary", onClick: () => this._autoScan(container) }, "Retry")),
+        ));
+      }
+    },
+
+    async _rescan(page) {
+      const container = page.querySelector("#home-cubes-container") || $("#home-cubes-container");
+      if (!container) return;
+      const btn = page.querySelector("#home-rescan-btn") || $("#home-rescan-btn");
+      if (btn) { btn.disabled = true; }
+      this._showScanLoading(container);
+      try {
+        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
+        state.scanData = data;
+        Sidebar.renderScannedCubes();
+        container.innerHTML = "";
+        this._renderCubeCards(container);
+        Toast.success(`Found ${data.candidates?.length || 0} cubes`);
+      } catch (err) {
+        container.innerHTML = "";
+        container.appendChild(el("div", { className: "empty-state" },
+          el("div", { className: "empty-state-title" }, "Scan failed"),
+          el("div", { className: "empty-state-text" }, err.message),
+        ));
+        Toast.error("Scan failed: " + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; }
+      }
+    },
+
+    _showScanLoading(container) {
+      container.innerHTML = "";
+      const loading = el("div", { className: "cube-cards-loading" });
+      loading.appendChild(el("div", { className: "flex items-center gap-3 mb-4" },
+        el("div", { className: "activity-spinner", style: "width:16px;height:16px;border-width:2px" }),
+        el("span", { className: "text-sm text-secondary" }, "Scanning instance — fetching cube RAM data and dimension metadata..."),
+      ));
+      // Skeleton cards
+      for (let i = 0; i < 6; i++) {
+        loading.appendChild(el("div", { className: "cube-card-skeleton" }));
+      }
+      container.appendChild(loading);
+    },
+
+    _renderCubeCards(container) {
+      const cubes = state.scanData?.candidates || [];
+      if (cubes.length === 0) {
+        container.appendChild(el("div", { className: "empty-state" },
+          el("div", { className: "empty-state-title" }, "No cubes found"),
+          el("div", { className: "empty-state-text" }, "Try lowering the RAM threshold or enabling 'Include optimized'."),
+        ));
         return;
       }
 
-      // Dashboard
-      page.appendChild(el("div", { className: "page-header" },
-        el("h1", { className: "page-title" }, `Welcome back`),
-        el("p", { className: "page-subtitle" }, `Connected to ${state.serverName || state.activeInstance}`),
+      // Summary line
+      const totalRam = cubes.reduce((sum, c) => sum + (c.ram_gb || 0), 0);
+      container.appendChild(el("div", { className: "cube-cards-summary" },
+        `${cubes.length} cube${cubes.length !== 1 ? "s" : ""} — ${totalRam.toFixed(2)} GB total RAM`
       ));
 
-      // Stat cards
-      const stats = el("div", { className: "stat-cards" });
-      stats.appendChild(this._statCard("INSTANCE", state.activeInstance || "—"));
-      stats.appendChild(this._statCard("SAVED CUBES", state.savedCubes.length));
-      stats.appendChild(this._statCard("RUNNING JOBS", "—", "jobsStat"));
-      stats.appendChild(this._statCard("RESULTS", "—", "resultsStat"));
-      page.appendChild(stats);
-
-      // Quick actions
-      const actions = el("div", { className: "flex gap-3 mb-4" });
-      const scanBtn = el("button", { className: "btn btn-primary", onClick: () => Router.navigate("#/cubes") },
-        el("span", { html: Icons.search }), "Scan Instance");
-      actions.appendChild(scanBtn);
-      page.appendChild(actions);
-
-      // Load async stats
-      this._loadStats();
-
-      // Recent jobs
-      this._loadRecentJobs(page);
-
-      // Guide & tips
-      page.appendChild(this._buildGuideContent());
-    },
-
-    _statCard(label, value, id) {
-      const card = el("div", { className: "stat-card" });
-      card.appendChild(el("div", { className: "stat-card-label" }, label));
-      const valEl = el("div", { className: "stat-card-value" }, String(value));
-      if (id) valEl.id = id;
-      card.appendChild(valEl);
-      return card;
-    },
-
-    async _loadStats() {
-      try {
-        const [statusData, resultsData] = await Promise.all([Api.getStatus(), Api.getResults()]);
-        const jobsEl = $("#jobsStat");
-        const resultsEl = $("#resultsStat");
-        if (jobsEl) jobsEl.textContent = statusData.active_job ? "1" : "0";
-        if (resultsEl) resultsEl.textContent = resultsData.results.length;
-      } catch { /* non-critical */ }
-    },
-
-    async _loadRecentJobs(page) {
-      try {
-        const data = await Api.getJobs();
-        const jobs = (data.jobs || []).slice(0, 5);
-        if (jobs.length === 0) return;
-
-        const section = el("div", null,
-          el("h3", { className: "card-title mb-2" }, "Recent Jobs"),
-        );
-        const card = el("div", { className: "card" });
-        jobs.forEach(job => {
-          const row = el("div", { className: "flex items-center justify-between", style: "padding: 8px 0; border-bottom: 1px solid var(--border-secondary)" });
-          row.appendChild(el("span", { className: "font-medium text-sm" }, job.cube_name || job.cube_config?.cube || "Unknown"));
-          const badgeClass = job.status === "running" ? "badge-info" : job.status === "completed" ? "badge-success" : "badge-error";
-          row.appendChild(el("span", { className: `badge ${badgeClass}` }, job.status));
-          card.appendChild(row);
+      const grid = el("div", { className: "cube-cards-grid" });
+      const maxRam = Math.max(...cubes.map(c => c.ram_gb || 0), 0.01);
+      cubes.forEach(c => {
+        const card = el("button", {
+          className: "cube-card",
+          onClick: () => Router.navigate(`#/cube/${encodeURIComponent(c.cube_name)}`),
         });
-        section.appendChild(card);
-        page.appendChild(section);
-      } catch { /* non-critical */ }
+        // Top row: name + badges
+        const top = el("div", { className: "cube-card-top" });
+        top.appendChild(el("span", { className: "cube-card-name" }, c.cube_name));
+        const badges = el("span", { className: "cube-card-badges" });
+        if (c.already_optimized) badges.appendChild(el("span", { className: "badge badge-success" }, "optimized"));
+        if (c.last_dim_has_strings) badges.appendChild(el("span", { className: "badge badge-warning" }, "strings"));
+        top.appendChild(badges);
+        card.appendChild(top);
+        // RAM bar
+        const barWrap = el("div", { className: "cube-card-bar-wrap" });
+        const barFill = el("div", { className: "cube-card-bar-fill" });
+        const pct = Math.max((c.ram_gb || 0) / maxRam * 100, 2);
+        barFill.style.width = pct + "%";
+        // Color: green < 33%, amber 33-66%, red > 66% of max
+        barFill.classList.add(pct > 66 ? "high" : pct > 33 ? "mid" : "low");
+        barWrap.appendChild(barFill);
+        card.appendChild(barWrap);
+        // Bottom row: stats
+        const bottom = el("div", { className: "cube-card-stats" });
+        bottom.appendChild(el("span", null, `${(c.ram_gb || 0).toFixed(2)} GB`));
+        bottom.appendChild(el("span", null, `${(c.pct_of_total || 0).toFixed(1)}% of model`));
+        bottom.appendChild(el("span", null, `${c.dim_count || 0} dims`));
+        card.appendChild(bottom);
+        grid.appendChild(card);
+      });
+      container.appendChild(grid);
+    },
+
+    // ---- Help: show tips in a modal instead of inline ----
+    _showHelpDrawer() {
+      Modal.open({
+        title: "Tips & Help",
+        body: this._buildGuideContent(),
+        size: "lg",
+      });
+    },
+
+    // ---- Collapsible help (for not-connected page) ----
+    _buildCollapsibleHelp() {
+      const section = el("div", { className: "collapsible-help" });
+      const toggle = el("button", { className: "collapsible-help-toggle" },
+        el("span", null, "Tips & Getting Started"),
+        el("span", { className: "collapsible-help-chevron", html: Icons.chevronRight }),
+      );
+      const content = el("div", { className: "collapsible-help-content hidden" });
+      content.appendChild(this._buildGuideContent());
+      toggle.addEventListener("click", () => {
+        content.classList.toggle("hidden");
+        const chevron = toggle.querySelector(".collapsible-help-chevron");
+        chevron.style.transform = content.classList.contains("hidden") ? "" : "rotate(90deg)";
+      });
+      section.appendChild(toggle);
+      section.appendChild(content);
+      return section;
     },
 
     _buildGuideContent() {
@@ -1534,7 +1843,7 @@ const OptimusPy = (function () {
 
       // ---- How to Use OptimusPy ----
       const howTo = el("div", { className: "card" });
-      howTo.appendChild(el("h3", { className: "card-title", style: "margin-bottom:12px" }, "How to Use OptimusPy"));
+      howTo.appendChild(el("h2", { className: "card-title", style: "margin-bottom:12px" }, "How to Use OptimusPy"));
 
       const steps = [
         { n: "1", title: "Connect", desc: "Select a TM1 instance from the sidebar and enter your password if needed." },
@@ -1573,7 +1882,7 @@ const OptimusPy = (function () {
 
       // ---- Dimension Ordering Tips ----
       const tips = el("div", { className: "card" });
-      tips.appendChild(el("h3", { className: "card-title", style: "margin-bottom:12px" }, "Dimension Ordering Tips"));
+      tips.appendChild(el("h2", { className: "card-title", style: "margin-bottom:12px" }, "Dimension Ordering Tips"));
       tips.appendChild(el("div", { style: "font-size:12px;color:var(--text-tertiary);margin-bottom:14px;line-height:1.4" },
         "Based on research from IBM documentation, the TM1 community, and the Horizon 2021 presentation by Hubert Heijkers, IBM Chief Architect of the TM1 Server."));
 
@@ -1635,7 +1944,346 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
-  // Page: Cubes (scan + table)
+  // Page: Navigation (split-panel: cube list + workspace)
+  // ==================================================================
+  const NavPage = {
+    _selectedCube: null,
+    _panelHidden: false,
+    _ramThreshold: 60,
+    _includeOptimized: false,
+
+    mount(params, query) {
+      if (!state.connected) {
+        Router.navigate("#/home");
+        return;
+      }
+
+      const cubeName = params.cubeName || query.cube || null;
+      const tab = query.tab || null;
+
+      // If same cube, just update workspace tab
+      if (cubeName && cubeName === this._selectedCube && tab) {
+        // Re-render workspace for tab switch
+        this._renderWorkspace(tab);
+        return;
+      }
+
+      this._selectedCube = cubeName;
+      this._renderCubePanel();
+
+      if (cubeName) {
+        this._renderWorkspace(tab || "overview");
+        this._highlightCube(cubeName);
+      } else {
+        this._renderEmptyWorkspace();
+      }
+    },
+
+    // ---- Left panel: cube list ----
+    _renderCubePanel() {
+      const header = $("#cubePanelHeader");
+      const body = $("#cubePanelBody");
+      header.innerHTML = "";
+      body.innerHTML = "";
+
+      // Header: filter controls
+      const filterWrap = el("div");
+      // RAM slider
+      const ramRow = el("div", { className: "flex items-center justify-between mb-2" });
+      ramRow.appendChild(el("span", { className: "cube-filter-label" }, "RAM Threshold"));
+      const ramValSpan = el("span", { className: "cube-filter-value" }, this._ramThreshold + "%");
+      ramRow.appendChild(ramValSpan);
+      filterWrap.appendChild(ramRow);
+      const ramSlider = el("input", { type: "range", min: "0", max: "100", value: String(this._ramThreshold), style: "width:100%;margin-bottom:8px" });
+      ramSlider.addEventListener("input", () => {
+        this._ramThreshold = parseInt(ramSlider.value);
+        ramValSpan.textContent = this._ramThreshold + "%";
+      });
+      // Don't auto-scan on slider change — user clicks Rescan when ready
+      filterWrap.appendChild(ramSlider);
+      // Include optimized + Rescan
+      const bottomRow = el("div", { className: "flex items-center justify-between" });
+      const optLabel = el("label", { className: "checkbox-label", style: "font-size:11px;gap:4px" });
+      const optCb = el("input", { type: "checkbox" });
+      optCb.checked = this._includeOptimized;
+      optCb.addEventListener("change", () => { this._includeOptimized = optCb.checked; });
+      optLabel.appendChild(optCb);
+      optLabel.appendChild(document.createTextNode("Include optimized"));
+      bottomRow.appendChild(optLabel);
+      const rescanBtn = el("button", { className: "btn btn-ghost btn-sm", id: "nav-rescan-btn", onClick: () => this._doScan() },
+        el("span", { html: Icons.refresh }));
+      bottomRow.appendChild(rescanBtn);
+      filterWrap.appendChild(bottomRow);
+      // Scan age indicator
+      const ageEl = el("div", { className: "text-xs text-tertiary", id: "scan-age", style: "margin-top:6px" });
+      filterWrap.appendChild(ageEl);
+      header.appendChild(filterWrap);
+
+      // Body: cube list — use cached data if available, otherwise scan
+      if (state.scanData) {
+        this._renderCubeList(body);
+        this._updateScanAge();
+      } else {
+        this._doScan();
+      }
+    },
+
+    _updateScanAge() {
+      const ageEl = $("#scan-age");
+      if (!ageEl) return;
+      if (state.scanTimestamp) {
+        ageEl.textContent = `Scanned ${ScanCache.formatAge(state.scanTimestamp)}`;
+      } else {
+        ageEl.textContent = "";
+      }
+    },
+
+    async _doScan() {
+      const body = $("#cubePanelBody");
+      const btn = $("#nav-rescan-btn");
+      if (btn) btn.disabled = true;
+      body.innerHTML = "";
+      // Loading
+      for (let i = 0; i < 6; i++) {
+        body.appendChild(el("div", { className: "cube-card-skeleton", style: "height:52px;margin-bottom:4px" }));
+      }
+      try {
+        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
+        state.scanData = data;
+        state.scanTimestamp = Date.now();
+        ScanCache.save(state.activeInstance, data);
+        Sidebar.renderScannedCubes();
+        body.innerHTML = "";
+        this._renderCubeList(body);
+        this._updateScanAge();
+      } catch (err) {
+        body.innerHTML = "";
+        body.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px" }, "Scan failed: " + err.message));
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    },
+
+    _renderCubeList(container) {
+      const cubes = state.scanData?.candidates || [];
+      if (cubes.length === 0) {
+        container.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px;text-align:center" }, "No cubes found"));
+        return;
+      }
+      const maxRam = Math.max(...cubes.map(c => c.ram_gb || 0), 0.01);
+      // Summary
+      container.appendChild(el("div", { className: "text-xs text-tertiary", style: "padding:0 4px 8px" },
+        `${cubes.length} cube${cubes.length !== 1 ? "s" : ""}`));
+
+      cubes.forEach(c => {
+        const isActive = c.cube_name === this._selectedCube;
+        const item = el("button", {
+          className: `cube-list-item${isActive ? " active" : ""}`,
+          dataset: { cube: c.cube_name },
+          onClick: () => {
+            this._selectedCube = c.cube_name;
+            history.replaceState(null, "", `#/nav?cube=${encodeURIComponent(c.cube_name)}`);
+            this._highlightCube(c.cube_name);
+            this._renderWorkspace("overview");
+          },
+        });
+        // Top: name + RAM
+        const top = el("div", { className: "cube-list-item-top" });
+        top.appendChild(el("span", { className: "cube-list-item-name" }, c.cube_name));
+        top.appendChild(el("span", { className: "cube-list-item-ram" }, `${(c.ram_gb || 0).toFixed(2)} GB`));
+        item.appendChild(top);
+        // Bar
+        const barWrap = el("div", { className: "cube-card-bar-wrap" });
+        const pct = Math.max((c.ram_gb || 0) / maxRam * 100, 2);
+        const barFill = el("div", { className: `cube-card-bar-fill ${pct > 66 ? "high" : pct > 33 ? "mid" : "low"}` });
+        barFill.style.width = pct + "%";
+        barWrap.appendChild(barFill);
+        item.appendChild(barWrap);
+        // Meta
+        const meta = el("div", { className: "cube-list-item-meta" });
+        meta.appendChild(el("span", null, `${c.dim_count || 0} dims`));
+        meta.appendChild(el("span", null, `${(c.pct_of_total || 0).toFixed(1)}%`));
+        if (c.already_optimized) meta.appendChild(el("span", { className: "badge badge-success", style: "font-size:9px;padding:0 4px" }, "opt"));
+        if (c.last_dim_has_strings) meta.appendChild(el("span", { className: "badge badge-warning", style: "font-size:9px;padding:0 4px" }, "str"));
+        item.appendChild(meta);
+        container.appendChild(item);
+      });
+    },
+
+    _highlightCube(cubeName) {
+      const body = $("#cubePanelBody");
+      if (!body) return;
+      body.querySelectorAll(".cube-list-item").forEach(item => {
+        item.classList.toggle("active", item.dataset.cube === cubeName);
+      });
+    },
+
+    // ---- Right panel: workspace ----
+    _renderEmptyWorkspace() {
+      const panel = $("#workspacePanel");
+      panel.innerHTML = "";
+      panel.appendChild(el("div", { className: "empty-state", style: "padding-top:80px" },
+        el("div", { className: "empty-state-icon", html: '<svg aria-hidden="true" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>' }),
+        el("div", { className: "empty-state-title" }, "Select a cube"),
+        el("div", { className: "empty-state-text" }, "Choose a cube from the list to view details and start optimizing."),
+      ));
+    },
+
+    _renderWorkspace(tab) {
+      const panel = $("#workspacePanel");
+      panel.innerHTML = "";
+      panel.style.position = "relative";
+
+      if (!this._selectedCube) {
+        this._renderEmptyWorkspace();
+        return;
+      }
+
+      // Toggle button to show/hide cube panel
+      const cubePanel = $("#cubePanel");
+      const toggleBtn = el("button", {
+        className: "cube-panel-toggle",
+        "aria-label": this._panelHidden ? "Show cube list" : "Hide cube list",
+        onClick: () => {
+          this._panelHidden = !this._panelHidden;
+          cubePanel.classList.toggle("hidden-panel", this._panelHidden);
+          toggleBtn.setAttribute("aria-label", this._panelHidden ? "Show cube list" : "Hide cube list");
+          toggleBtn.innerHTML = this._panelHidden ? Icons.chevronRight : Icons.chevronLeft;
+          // Show/hide breadcrumb
+          const bc = panel.querySelector(".workspace-breadcrumb");
+          if (bc) bc.style.display = this._panelHidden ? "flex" : "none";
+        },
+      });
+      toggleBtn.innerHTML = this._panelHidden ? Icons.chevronRight : Icons.chevronLeft;
+      panel.appendChild(toggleBtn);
+
+      // Breadcrumb (shown when panel hidden)
+      const breadcrumb = el("div", { className: "workspace-breadcrumb", style: this._panelHidden ? "" : "display:none" });
+      breadcrumb.appendChild(el("button", { onClick: () => toggleBtn.click() },
+        el("span", { html: Icons.chevronRight }), "Show cubes"));
+      breadcrumb.appendChild(el("span", null, " / "));
+      breadcrumb.appendChild(el("span", { style: "font-weight:600;color:var(--text-primary)" }, this._selectedCube));
+      panel.appendChild(breadcrumb);
+
+      // Content container (offset for toggle button)
+      const content = el("div", { style: "padding-left:36px" });
+
+      // Cube title
+      content.appendChild(el("h1", { className: "page-title mb-2" }, this._selectedCube));
+
+      // Delegate to CubeWorkspace for the actual tab rendering
+      // We pass the content container and tab name
+      this._renderCubeContent(content, tab || "overview");
+
+      panel.appendChild(content);
+    },
+
+    _renderCubeContent(container, tab) {
+      // We reuse CubeWorkspace's internal methods by telling it to render into our container
+      // Set the cube name on CubeWorkspace and trigger its tab rendering
+      CubeWorkspace._cubeName = this._selectedCube;
+      CubeWorkspace._activeTab = tab;
+      CubeWorkspace._tabCache = {};
+
+      // Tabs bar
+      const tabsEl = el("div", { className: "tabs", role: "tablist", "aria-label": "Cube workspace tabs" });
+      const tabNames = ["overview", "configure", "optimize", "results"];
+      tabNames.forEach((t, idx) => {
+        const label = t.charAt(0).toUpperCase() + t.slice(1);
+        const isActive = t === tab;
+        const tabBtn = el("button", {
+          className: `tab${isActive ? " active" : ""}`,
+          role: "tab",
+          "aria-selected": isActive ? "true" : "false",
+          tabindex: isActive ? "0" : "-1",
+          id: `tab-${t}`,
+          "aria-controls": `tabpanel-${t}`,
+          dataset: { tab: t },
+          onClick: () => {
+            history.replaceState(null, "", `#/nav?cube=${encodeURIComponent(this._selectedCube)}&tab=${t}`);
+            // Re-render workspace for this tab
+            this._renderWorkspace(t);
+          },
+          onKeydown: (e) => {
+            let newIdx = idx;
+            if (e.key === "ArrowRight") newIdx = (idx + 1) % tabNames.length;
+            else if (e.key === "ArrowLeft") newIdx = (idx - 1 + tabNames.length) % tabNames.length;
+            else if (e.key === "Home") newIdx = 0;
+            else if (e.key === "End") newIdx = tabNames.length - 1;
+            else return;
+            e.preventDefault();
+            const target = tabsEl.querySelector(`[data-tab="${tabNames[newIdx]}"]`);
+            if (target) { target.click(); target.focus(); }
+          },
+        }, label);
+        tabsEl.appendChild(tabBtn);
+      });
+
+      // Check for results availability and add "View Results" action
+      const hasResults = this._cubeHasResults(this._selectedCube);
+      const actionsRow = el("div", { className: "flex items-center gap-2 mb-4", style: "margin-top:-4px" });
+      const viewResultsBtn = el("button", {
+        className: `btn btn-ghost btn-sm${hasResults ? "" : " disabled"}`,
+        disabled: !hasResults,
+        onClick: () => { if (hasResults) Router.navigate(`#/results?cube=${encodeURIComponent(this._selectedCube)}`); },
+      }, el("span", { html: Icons.externalLink }), "View Prior Results");
+      actionsRow.appendChild(viewResultsBtn);
+
+      // Help button
+      const helpBtn = el("button", { className: "btn btn-ghost btn-sm", onClick: () => HomePage._showHelpDrawer() },
+        el("span", { html: Icons.info }), "Help");
+      actionsRow.appendChild(helpBtn);
+
+      container.appendChild(tabsEl);
+      container.appendChild(actionsRow);
+
+      // Tab content
+      const tabPane = el("div", { className: "tab-pane", role: "tabpanel", id: `tabpanel-${tab}`, "aria-labelledby": `tab-${tab}` });
+      CubeWorkspace._tabCache = {};
+      CubeWorkspace._contentEl = tabPane;
+      CubeWorkspace._tabsEl = tabsEl;
+
+      switch (tab) {
+        case "overview": CubeWorkspace._renderOverview(tabPane); break;
+        case "configure": CubeWorkspace._renderConfigure(tabPane).catch(err => {
+          tabPane.innerHTML = "";
+          tabPane.appendChild(el("div", { className: "empty-state" },
+            el("div", { className: "empty-state-title" }, "Failed to load configuration"),
+            el("div", { className: "empty-state-text" }, err.message),
+          ));
+        }); break;
+        case "optimize": CubeWorkspace._renderOptimize(tabPane); break;
+        case "results": CubeWorkspace._renderResults(tabPane); break;
+      }
+      container.appendChild(tabPane);
+    },
+
+    _cubeHasResults(cubeName) {
+      // Check if there are result files for this cube in the results API cache
+      // We'll do a quick check — if scanData has the cube or savedCubes has it
+      return state.savedCubes.some(sc => sc.cube === cubeName);
+    },
+
+    // ---- Panel visibility ----
+    showPanel() {
+      this._panelHidden = false;
+      const cubePanel = $("#cubePanel");
+      if (cubePanel) cubePanel.classList.remove("hidden-panel");
+    },
+
+    hidePanel() {
+      this._panelHidden = true;
+      const cubePanel = $("#cubePanel");
+      if (cubePanel) cubePanel.classList.add("hidden-panel");
+    },
+
+    unmount() {
+      this._selectedCube = null;
+    },
+  };
+
+  // ==================================================================
+  // Page: Cubes (scan + table) — legacy, kept for direct URL access
   // ==================================================================
   const CubesPage = {
     _table: null,
@@ -1835,17 +2483,34 @@ const OptimusPy = (function () {
       page.appendChild(el("h1", { className: "page-title mb-4" }, this._cubeName));
 
       // Tabs bar
-      this._tabsEl = el("div", { className: "tabs" });
-      ["overview", "configure", "optimize", "results"].forEach(t => {
+      this._tabsEl = el("div", { className: "tabs", role: "tablist", "aria-label": "Cube workspace tabs" });
+      const tabNames = ["overview", "configure", "optimize", "results"];
+      tabNames.forEach((t, idx) => {
         const label = t.charAt(0).toUpperCase() + t.slice(1);
-        const tab = el("div", {
-          className: `tab${t === this._activeTab ? " active" : ""}`,
+        const isActive = t === this._activeTab;
+        const tab = el("button", {
+          className: `tab${isActive ? " active" : ""}`,
+          role: "tab",
+          "aria-selected": isActive ? "true" : "false",
+          tabindex: isActive ? "0" : "-1",
+          id: `tab-${t}`,
+          "aria-controls": `tabpanel-${t}`,
           dataset: { tab: t },
           onClick: () => {
             this._switchTab(t);
-            // Update URL without triggering full re-mount
             history.replaceState(null, "", `#/cube/${encodeURIComponent(this._cubeName)}?tab=${t}`);
-          }
+          },
+          onKeydown: (e) => {
+            let newIdx = idx;
+            if (e.key === "ArrowRight") newIdx = (idx + 1) % tabNames.length;
+            else if (e.key === "ArrowLeft") newIdx = (idx - 1 + tabNames.length) % tabNames.length;
+            else if (e.key === "Home") newIdx = 0;
+            else if (e.key === "End") newIdx = tabNames.length - 1;
+            else return;
+            e.preventDefault();
+            const target = this._tabsEl.querySelector(`[data-tab="${tabNames[newIdx]}"]`);
+            if (target) { target.click(); target.focus(); }
+          },
         }, label);
         this._tabsEl.appendChild(tab);
       });
@@ -1863,10 +2528,13 @@ const OptimusPy = (function () {
       if (tabName === this._activeTab && this._tabCache[tabName]) return;
       this._activeTab = tabName;
 
-      // Update tab bar active states
+      // Update tab bar active + ARIA states
       if (this._tabsEl) {
         this._tabsEl.querySelectorAll(".tab").forEach(t => {
-          t.classList.toggle("active", t.dataset.tab === tabName);
+          const isActive = t.dataset.tab === tabName;
+          t.classList.toggle("active", isActive);
+          t.setAttribute("aria-selected", String(isActive));
+          t.setAttribute("tabindex", isActive ? "0" : "-1");
         });
       }
 
@@ -1886,7 +2554,7 @@ const OptimusPy = (function () {
     },
 
     _renderTab(tabName) {
-      const container = el("div", { className: "tab-pane", dataset: { tabPane: tabName } });
+      const container = el("div", { className: "tab-pane", role: "tabpanel", id: `tabpanel-${tabName}`, "aria-labelledby": `tab-${tabName}`, dataset: { tabPane: tabName } });
       this._tabCache[tabName] = container;
       this._contentEl.appendChild(container);
       switch (tabName) {
@@ -1960,7 +2628,41 @@ const OptimusPy = (function () {
       const metaSection = el("div", { id: "overview-metadata" });
       const intel = state.cubeMetadata[this._cubeName];
       if (intel) {
-        // Already loaded — show it
+        // Already loaded — show it with a refresh option
+        const refreshRow = el("div", { className: "flex items-center gap-2 mb-3" });
+        const cachedEntry = IntelCache.load(state.activeInstance, this._cubeName);
+        if (cachedEntry) {
+          refreshRow.appendChild(el("span", { className: "text-xs text-tertiary" },
+            `Analyzed ${ScanCache.formatAge(cachedEntry.ts)}`));
+        }
+        const refreshBtn = el("button", { className: "btn btn-ghost btn-sm" },
+          el("span", { html: Icons.refresh }), "Refresh");
+        refreshBtn.addEventListener("click", async () => {
+          // Clear caches and re-fetch
+          delete state.cubeMetadata[this._cubeName];
+          IntelCache.clear(state.activeInstance, this._cubeName);
+          delete state.cubeViews[this._cubeName];
+          refreshBtn.disabled = true;
+          refreshBtn.textContent = "Refreshing...";
+          try {
+            const [data] = await Promise.all([
+              this._fetchIntelligence(),
+              this._prefetchViews(),
+            ]);
+            metaSection.innerHTML = "";
+            const newRefreshRow = el("div", { className: "flex items-center gap-2 mb-3" });
+            newRefreshRow.appendChild(el("span", { className: "text-xs text-tertiary" }, "Analyzed just now"));
+            metaSection.appendChild(newRefreshRow);
+            this._renderFullMetadata(metaSection, data);
+            Toast.success("Cube analysis refreshed");
+          } catch (err) {
+            Toast.error("Refresh failed: " + err.message);
+            refreshBtn.disabled = false;
+            refreshBtn.innerHTML = Icons.refresh + " Refresh";
+          }
+        });
+        refreshRow.appendChild(refreshBtn);
+        metaSection.appendChild(refreshRow);
         this._renderFullMetadata(metaSection, intel);
       } else {
         // Show button to analyze cube (fetches dimension metadata + views)
@@ -2332,7 +3034,7 @@ const OptimusPy = (function () {
         this._selectedViews.forEach((view, idx) => {
           const row = el("div", { className: "selection-row" });
           row.appendChild(el("span", { className: "selection-row-name" }, view));
-          const removeBtn = el("span", { className: "selection-row-remove", html: Icons.x, title: "Remove" });
+          const removeBtn = el("span", { className: "selection-row-remove", role: "button", tabindex: "0", "aria-label": "Remove", html: Icons.x, title: "Remove" });
           removeBtn.addEventListener("click", () => {
             this._selectedViews.splice(idx, 1);
             this._renderViewsSection();
@@ -2448,7 +3150,7 @@ const OptimusPy = (function () {
           // Selection row
           const row = el("div", { className: "selection-row" });
           row.appendChild(el("span", { className: "selection-row-name" }, proc.name));
-          const removeBtn = el("span", { className: "selection-row-remove", html: Icons.x, title: "Remove" });
+          const removeBtn = el("span", { className: "selection-row-remove", role: "button", tabindex: "0", "aria-label": "Remove", html: Icons.x, title: "Remove" });
           removeBtn.addEventListener("click", () => {
             this._selectedProcesses.splice(idx, 1);
             this._renderProcessSection();
@@ -2703,9 +3405,18 @@ const OptimusPy = (function () {
     },
 
     async _fetchIntelligence() {
+      // 1. In-memory cache
       if (state.cubeMetadata[this._cubeName]) return state.cubeMetadata[this._cubeName];
+      // 2. localStorage cache
+      const cached = IntelCache.load(state.activeInstance, this._cubeName);
+      if (cached) {
+        state.cubeMetadata[this._cubeName] = cached.data;
+        return cached.data;
+      }
+      // 3. Fetch from API and cache
       const data = await Api.getCubeIntelligence(state.activeInstance, state.password, this._cubeName);
       state.cubeMetadata[this._cubeName] = data;
+      IntelCache.save(state.activeInstance, this._cubeName, data);
       return data;
     },
 
@@ -2991,7 +3702,7 @@ const OptimusPy = (function () {
           info.appendChild(el("div", { className: "font-medium text-sm" }, c.cube));
           info.appendChild(el("div", { className: "text-xs text-tertiary" }, `${c.instance} / ${c.mode} / ${c.filename}`));
           row.appendChild(info);
-          const deleteBtn = el("button", { className: "btn btn-ghost btn-sm", html: Icons.trash, onClick: () => {
+          const deleteBtn = el("button", { className: "btn btn-ghost btn-sm", "aria-label": "Delete config", html: Icons.trash, onClick: () => {
             Modal.confirm(`Delete config "${c.filename}"?`, async () => {
               try {
                 await Api.deleteConfig(c.filename);
@@ -3045,6 +3756,7 @@ const OptimusPy = (function () {
 
     // Register pages
     Router.register("home", HomePage);
+    Router.register("nav", NavPage);
     Router.register("cubes", CubesPage);
     Router.register("cube-workspace", CubeWorkspace);
     Router.register("results", ResultsPage);
