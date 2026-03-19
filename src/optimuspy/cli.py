@@ -17,11 +17,51 @@ from optimuspy.core import (
 )
 
 
+def print_banner():
+    S = "\033[38;2;108;172;228m"  # Sky blue
+    G = "\033[38;2;255;184;28m"   # Gold
+    W = "\033[97m"                # White
+    D = "\033[90m"                # Dim gray
+    I = "\033[3m"                 # Italic
+    R = "\033[0m"                 # Reset
+
+    print(f"""
+{S} ██████╗ ██████╗ ████████╗██╗███╗   ███╗██╗   ██╗███████╗
+██╔═══██╗██╔══██╗╚══██╔══╝██║████╗ ████║██║   ██║██╔════╝
+██║   ██║██████╔╝   ██║   ██║██╔████╔██║██║   ██║███████╗
+██║   ██║██╔═══╝    ██║   ██║██║╚██╔╝██║██║   ██║╚════██║
+╚██████╔╝██║        ██║   ██║██║ ╚═╝ ██║╚██████╔╝███████║
+ ╚═════╝ ╚═╝        ╚═╝   ╚═╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝{R}
+              {G}██████╗ ██╗   ██╗
+              ██╔══██╗╚██╗ ██╔╝
+              ██████╔╝ ╚████╔╝
+              ██╔═══╝   ╚██╔╝
+              ██║        ██║
+              ╚═╝        ╚═╝{R}
+
+       {G}⚡{W} TM1 Cube Dimension Order Optimizer {G}⚡{R}
+
+          {S}┌───┬───┬───┐      ┌───┬───┬───┐
+          │{G} 3 {S}│{G} 1 {S}│{G} 4 {S}│      │{G} 1 {S}│{G} 2 {S}│{G} 3 {S}│
+          ├───┼───┼───┤  ──▶  ├───┼───┼───┤
+          │{G} 2 {S}│{G} 5 {S}│{G} 6 {S}│      │{G} 4 {S}│{G} 5 {S}│{G} 6 {S}│
+          └───┴───┴───┘      └───┴───┴───┘{R}
+           {D}   scrambled    ──▶    optimized{R}
+
+          {I}{D}"Till all are optimized." — Optimus Py{R}
+
+{W}                   CUBEWISE{R}
+{S}                  #dogoodtm1{R}
+{D}             https://cubewise.com{R}
+""")
+
+
 def main():
     # Only change CWD for frozen exe — pip/script users expect CWD-relative paths
     if getattr(sys, 'frozen', False):
         set_current_directory()
 
+    print_banner()
     configure_logging()
 
     parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
