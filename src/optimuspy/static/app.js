@@ -65,6 +65,7 @@ const OptimusPy = (function () {
     rotateCcw: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>',
     square: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>',
     plus: '<svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    transfer: '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><line x1="3" y1="5" x2="21" y2="5"/><polyline points="7 23 3 19 7 15"/><line x1="21" y1="19" x2="3" y2="19"/></svg>',
   };
 
   // ==================================================================
@@ -209,6 +210,21 @@ const OptimusPy = (function () {
     getJobs() { return this._fetch("GET", "/api/jobs"); },
     getResults() { return this._fetch("GET", "/api/results"); },
     getStatus() { return this._fetch("GET", "/api/status"); },
+    createInstance(name, params) { return this._fetch("POST", "/api/instances", { name, params }); },
+    deleteInstance(name) { return this._fetch("DELETE", `/api/instance/${encodeURIComponent(name)}`); },
+    deleteInstanceField(name, key) { return this._fetch("DELETE", `/api/instance/${encodeURIComponent(name)}/field/${encodeURIComponent(key)}`); },
+    transferScan(instance, password, ramPercent) {
+      return this._fetch("POST", "/api/transfer/scan", { instance, password, ram_percent: ramPercent });
+    },
+    transferTargetOrders(instance, password, cubes) {
+      return this._fetch("POST", "/api/transfer/target-orders", { instance, password, cubes });
+    },
+    transferApply(instance, password, orders) {
+      return this._fetch("POST", "/api/transfer/apply", { instance, password, orders });
+    },
+    transferExport(instance, orders) {
+      return this._fetch("POST", "/api/transfer/export", { instance, orders });
+    },
   };
 
   // ==================================================================
@@ -1577,7 +1593,7 @@ const OptimusPy = (function () {
       });
 
       // Update title
-      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings" };
+      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Transfer" };
       document.title = `OptimusPy — ${titles[pageName] || "Dashboard"}`;
 
       // Mount
@@ -3575,6 +3591,21 @@ const OptimusPy = (function () {
   // ==================================================================
   // Page: Settings
   // ==================================================================
+  // ==================================================================
+  // TransferPage (placeholder — full implementation in Tasks 6+7)
+  // ==================================================================
+  const TransferPage = {
+    mount() {
+      const page = $("#page-transfer");
+      page.innerHTML = "";
+      page.appendChild(el("div", { className: "page-header" },
+        el("h1", { className: "page-title" }, "Dimension Order Transfer"),
+        el("p", { className: "text-secondary text-sm mt-1" }, "Transfer page — coming soon"),
+      ));
+    },
+    unmount() {},
+  };
+
   const SettingsPage = {
     mount() {
       const page = $("#page-settings");
@@ -3608,9 +3639,53 @@ const OptimusPy = (function () {
       page.appendChild(themeCard);
 
       // Instance configs — show ALL instances from config.ini
-      if (state.instances.length > 0) {
+      {
         const instancesCard = el("div", { className: "card mb-4" });
         instancesCard.appendChild(el("div", { className: "card-title mb-4" }, "TM1 Instances"));
+
+        // "New Instance" button
+        const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
+          // Simple modal with text input
+          const modal = document.getElementById("modal-container");
+          const backdrop = document.getElementById("modal-backdrop");
+          modal.innerHTML = "";
+          modal.appendChild(el("div", { className: "modal-header" },
+            el("h3", { id: "modal-title-id" }, "New TM1 Instance"),
+            el("button", { className: "btn btn-ghost btn-sm", html: Icons.x, onClick: () => {
+              modal.classList.add("hidden"); backdrop.classList.add("hidden");
+            }}),
+          ));
+          const body = el("div", { className: "modal-body" });
+          const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
+          body.appendChild(el("label", { className: "form-label" }, "Instance Name"));
+          body.appendChild(nameInput);
+          modal.appendChild(body);
+          const footer = el("div", { className: "modal-footer" });
+          footer.appendChild(el("button", { className: "btn btn-secondary", onClick: () => {
+            modal.classList.add("hidden"); backdrop.classList.add("hidden");
+          }}, "Cancel"));
+          footer.appendChild(el("button", { className: "btn btn-primary", onClick: async () => {
+            const name = nameInput.value.trim();
+            if (!name) { Toast.error("Instance name is required"); return; }
+            try {
+              await Api.createInstance(name, {});
+              Toast.success(`Instance "${name}" created`);
+              modal.classList.add("hidden"); backdrop.classList.add("hidden");
+              await Sidebar.loadInstances();
+              this.mount();
+            } catch (err) {
+              Toast.error(err.message);
+            }
+          }}, "Create"));
+          modal.appendChild(footer);
+          modal.classList.remove("hidden"); backdrop.classList.remove("hidden");
+          nameInput.focus();
+        }}, el("span", { html: Icons.plus }), " New Instance");
+        instancesCard.appendChild(newInstanceBtn);
+
+        if (state.instances.length === 0) {
+          instancesCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No instances configured. Add one to get started."));
+        }
 
         const tabs = el("div", { className: "tabs" });
         const containers = {};
@@ -3640,9 +3715,11 @@ const OptimusPy = (function () {
         page.appendChild(instancesCard);
 
         // Load first instance config
-        const firstName = state.instances[0];
-        this._loadInstanceConfig(containers[firstName], firstName);
-        containers[firstName].dataset.loaded = "true";
+        if (state.instances.length > 0) {
+          const firstName = state.instances[0];
+          this._loadInstanceConfig(containers[firstName], firstName);
+          containers[firstName].dataset.loaded = "true";
+        }
       }
 
       // Saved configs management
@@ -3658,21 +3735,48 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getInstance(instanceName);
         const params = data.params || {};
+        const fieldsContainer = el("div", { className: "instance-fields" });
 
+        // Render existing fields (skip password — handled separately)
         Object.entries(params).forEach(([key, value]) => {
-          if (key.toLowerCase() === "password") return; // Don't show password
-          const group = el("div", { className: "form-group" });
-          group.appendChild(el("label", { className: "form-label" }, key));
-          const input = el("input", { className: "form-input", type: "text", value, dataset: { key } });
-          group.appendChild(input);
-          container.appendChild(group);
+          if (key.toLowerCase() === "password") return;
+          fieldsContainer.appendChild(this._createFieldRow(key, value, instanceName, fieldsContainer));
         });
+        container.appendChild(fieldsContainer);
 
-        const saveBtn = el("button", { className: "btn btn-primary mt-2" }, "Save Instance Config");
+        // "Add Field" button
+        const addFieldBtn = el("button", { className: "btn btn-secondary btn-sm mt-2", onClick: () => {
+          const row = this._createFieldRow("", "", instanceName, fieldsContainer, true);
+          fieldsContainer.appendChild(row);
+          // Focus the key input
+          const keyInput = row.querySelector("[data-field-key]");
+          if (keyInput) keyInput.focus();
+        }}, el("span", { html: Icons.plus }), " Add Field");
+        container.appendChild(addFieldBtn);
+
+        // Password field (write-only)
+        const pwGroup = el("div", { className: "form-group mt-4" });
+        pwGroup.appendChild(el("label", { className: "form-label" }, "Update Password (write-only)"));
+        const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Leave empty to keep current", dataset: { key: "password" } });
+        pwGroup.appendChild(pwInput);
+        container.appendChild(pwGroup);
+
+        // Action buttons row
+        const actionsRow = el("div", { className: "flex gap-2 mt-4 flex-wrap" });
+
+        // Save button
+        const saveBtn = el("button", { className: "btn btn-primary" }, "Save");
         saveBtn.addEventListener("click", async () => {
-          const inputs = $$("[data-key]", container);
           const newParams = {};
-          inputs.forEach(inp => { newParams[inp.dataset.key] = inp.value; });
+          fieldsContainer.querySelectorAll("[data-field-row]").forEach(row => {
+            const keyEl = row.querySelector("[data-field-key]");
+            const valEl = row.querySelector("[data-field-value]");
+            const key = keyEl ? (keyEl.dataset.fieldKey || keyEl.value || "").trim() : "";
+            const val = valEl ? valEl.value : "";
+            if (key) newParams[key] = val;
+          });
+          // Include password only if non-empty
+          if (pwInput.value) newParams.password = pwInput.value;
           try {
             await Api.updateInstance(instanceName, newParams);
             Toast.success(`Config saved for ${instanceName}`);
@@ -3680,10 +3784,89 @@ const OptimusPy = (function () {
             Toast.error(err.message);
           }
         });
-        container.appendChild(saveBtn);
+        actionsRow.appendChild(saveBtn);
+
+        // Test Connection button
+        const testBtn = el("button", { className: "btn btn-secondary" }, "Test Connection");
+        testBtn.addEventListener("click", async () => {
+          testBtn.disabled = true;
+          testBtn.textContent = "Testing...";
+          try {
+            const pw = pwInput.value || state.password || null;
+            const resp = await Api.connect(instanceName, pw);
+            Toast.success(`Connected to ${resp.server_name} (${resp.cube_count} cubes)`);
+          } catch (err) {
+            Toast.error(`Connection failed: ${err.message}`);
+          } finally {
+            testBtn.disabled = false;
+            testBtn.textContent = "Test Connection";
+          }
+        });
+        actionsRow.appendChild(testBtn);
+
+        // Delete Instance button
+        const deleteBtn = el("button", { className: "btn btn-danger" }, "Delete Instance");
+        deleteBtn.addEventListener("click", () => {
+          Modal.confirm(`Delete instance "${instanceName}" from config.ini? This cannot be undone.`, async () => {
+            try {
+              await Api.deleteInstance(instanceName);
+              Toast.success(`Instance "${instanceName}" deleted`);
+              // Reload instances and re-render settings
+              await Sidebar.loadInstances();
+              this.mount();
+            } catch (err) {
+              Toast.error(err.message);
+            }
+          });
+        });
+        actionsRow.appendChild(deleteBtn);
+
+        container.appendChild(actionsRow);
       } catch (err) {
         container.appendChild(el("div", { className: "text-secondary text-sm" }, "Failed to load config: " + err.message));
       }
+    },
+
+    _createFieldRow(key, value, instanceName, fieldsContainer, isNew = false) {
+      const row = el("div", { className: "flex gap-2 items-center mb-2", dataset: { fieldRow: "true" } });
+
+      if (isNew) {
+        // Editable key input for new fields
+        const keyInput = el("input", {
+          className: "form-input", type: "text", placeholder: "key",
+          style: "flex:0.4;", dataset: { fieldKey: "" },
+        });
+        keyInput.addEventListener("input", () => { keyInput.dataset.fieldKey = keyInput.value; });
+        row.appendChild(keyInput);
+      } else {
+        // Hidden input to carry the key value + visible label
+        row.appendChild(el("input", { type: "hidden", dataset: { fieldKey: key }, value: key }));
+        row.appendChild(el("label", { className: "form-label", style: "flex:0.4;min-width:100px;margin:0;" }, key));
+      }
+
+      const valInput = el("input", { className: "form-input", type: "text", value, style: "flex:1;", dataset: { fieldValue: "true" } });
+      row.appendChild(valInput);
+
+      // Delete field button
+      const delBtn = el("button", {
+        className: "btn btn-ghost btn-sm", "aria-label": `Delete field ${key}`, html: Icons.x,
+        onClick: async () => {
+          if (isNew || !key) {
+            // Just remove the row from DOM — not saved yet
+            row.remove();
+            return;
+          }
+          try {
+            await Api.deleteInstanceField(instanceName, key);
+            row.remove();
+            Toast.success(`Field "${key}" removed`);
+          } catch (err) {
+            Toast.error(err.message);
+          }
+        }
+      });
+      row.appendChild(delBtn);
+      return row;
     },
 
     async _loadSavedConfigs(container) {
@@ -3762,6 +3945,7 @@ const OptimusPy = (function () {
     Router.register("results", ResultsPage);
     Router.register("jobs", JobsPage);
     Router.register("settings", SettingsPage);
+    Router.register("transfer", TransferPage);
 
     // Load initial data (non-blocking — app should load even if API calls fail)
     try { await Sidebar.loadInstances(); } catch { /* will show empty instance list */ }
