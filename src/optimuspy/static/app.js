@@ -184,7 +184,7 @@ const OptimusPy = (function () {
     },
     getInstances() { return this._fetch("GET", "/api/instances"); },
     getInstance(name) { return this._fetch("GET", `/api/instance/${encodeURIComponent(name)}`); },
-    updateInstance(name, params) { return this._fetch("POST", `/api/instance/${encodeURIComponent(name)}`, params); },
+    updateInstance(name, params) { return this._fetch("POST", `/api/instance/${encodeURIComponent(name)}`, { params }); },
     connect(instance, password) { return this._fetch("POST", "/api/connect", { instance, password }); },
     scan(instance, password, ramPercent, includeOptimized) {
       return this._fetch("POST", "/api/scan", { instance, password, ram_percent: ramPercent, include_optimized: includeOptimized });
