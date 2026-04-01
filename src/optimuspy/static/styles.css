@@ -2745,3 +2745,191 @@ input[type="range"]:focus {
   white-space: nowrap;
   border-width: 0;
 }
+
+/* ==================================================================
+   Transfer Page
+   ================================================================== */
+
+.transfer-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  min-height: 60vh;
+}
+
+@media (max-width: 900px) {
+  .transfer-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.transfer-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.transfer-panel-header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.transfer-connect-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.transfer-connect-row .form-input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.transfer-filter-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.transfer-cube-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 50vh;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+}
+
+.transfer-cube-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-secondary);
+  cursor: grab;
+  transition: background 0.15s;
+}
+
+.transfer-cube-row:hover {
+  background: var(--bg-hover);
+}
+
+.transfer-cube-row:last-child {
+  border-bottom: none;
+}
+
+.transfer-cube-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Drop zone */
+.transfer-drop-zone {
+  flex: 1;
+  min-height: 200px;
+  border: 2px dashed var(--border-secondary);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  overflow-y: auto;
+  max-height: 55vh;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.transfer-drop-zone.drag-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.transfer-drop-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 150px;
+  opacity: 0.6;
+}
+
+/* Target cards */
+.transfer-target-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Order comparison */
+.transfer-order-comparison {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.transfer-order-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.transfer-order-arrow {
+  display: flex;
+  align-items: center;
+  padding-top: 1.25rem;
+  opacity: 0.4;
+}
+
+.transfer-dim-tag {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 2px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dim-current {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.dim-proposed {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.dim-changed {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  font-weight: 600;
+}
+
+/* Warning text */
+.text-warning {
+  color: var(--warning, #e6a700);
+}
+
+/* Button danger variant */
+.btn-danger {
+  background: var(--error, #dc3545);
+  color: #fff;
+  border: none;
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--error, #dc3545) 85%, #000);
+}
+
+/* Instance fields in Settings */
+.instance-fields {
+  margin-bottom: 0.5rem;
+}
