@@ -1593,7 +1593,7 @@ const OptimusPy = (function () {
       });
 
       // Update title
-      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Transfer" };
+      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Sync Order" };
       document.title = `OptimusPy — ${titles[pageName] || "Dashboard"}`;
 
       // Mount
@@ -3616,8 +3616,8 @@ const OptimusPy = (function () {
       page.innerHTML = "";
 
       page.appendChild(el("div", { className: "page-header" },
-        el("h1", { className: "page-title" }, "Dimension Order Transfer"),
-        el("p", { className: "text-secondary text-sm mt-1" }, "Transfer optimized dimension orders from a source instance to a target instance"),
+        el("h1", { className: "page-title" }, "Sync Order"),
+        el("p", { className: "text-secondary text-sm mt-1" }, "Sync optimized dimension orders from a source instance to a target instance"),
       ));
 
       const panels = el("div", { className: "transfer-panels" });
@@ -3994,40 +3994,31 @@ const OptimusPy = (function () {
 
         // "New Instance" button
         const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
-          // Simple modal with text input
-          const modal = document.getElementById("modal-container");
-          const backdrop = document.getElementById("modal-backdrop");
-          modal.innerHTML = "";
-          modal.appendChild(el("div", { className: "modal-header" },
-            el("h3", { id: "modal-title-id" }, "New TM1 Instance"),
-            el("button", { className: "btn btn-ghost btn-sm", html: Icons.x, onClick: () => {
-              modal.classList.add("hidden"); backdrop.classList.add("hidden");
-            }}),
-          ));
-          const body = el("div", { className: "modal-body" });
           const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
-          body.appendChild(el("label", { className: "form-label" }, "Instance Name"));
-          body.appendChild(nameInput);
-          modal.appendChild(body);
-          const footer = el("div", { className: "modal-footer" });
-          footer.appendChild(el("button", { className: "btn btn-secondary", onClick: () => {
-            modal.classList.add("hidden"); backdrop.classList.add("hidden");
-          }}, "Cancel"));
-          footer.appendChild(el("button", { className: "btn btn-primary", onClick: async () => {
-            const name = nameInput.value.trim();
-            if (!name) { Toast.error("Instance name is required"); return; }
-            try {
-              await Api.createInstance(name, {});
-              Toast.success(`Instance "${name}" created`);
-              modal.classList.add("hidden"); backdrop.classList.add("hidden");
-              await Sidebar.loadInstances();
-              this.mount();
-            } catch (err) {
-              Toast.error(err.message);
-            }
-          }}, "Create"));
-          modal.appendChild(footer);
-          modal.classList.remove("hidden"); backdrop.classList.remove("hidden");
+          const bodyEl = el("div", null,
+            el("label", { className: "form-label" }, "Instance Name"),
+            nameInput,
+          );
+          Modal.open({
+            title: "New TM1 Instance",
+            body: bodyEl,
+            footer: [
+              el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
+              el("button", { className: "btn btn-primary", onClick: async () => {
+                const name = nameInput.value.trim();
+                if (!name) { Toast.error("Instance name is required"); return; }
+                try {
+                  await Api.createInstance(name, {});
+                  Toast.success(`Instance "${name}" created`);
+                  Modal.close();
+                  await Sidebar.loadInstances();
+                  this.mount();
+                } catch (err) {
+                  Toast.error(err.message);
+                }
+              }}, "Create"),
+            ],
+          });
           nameInput.focus();
         }}, el("span", { html: Icons.plus }), " New Instance");
         instancesCard.appendChild(newInstanceBtn);
