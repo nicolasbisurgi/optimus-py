@@ -193,6 +193,97 @@ class JobManager:
                 if self._active_job_id == job_id:
                     self._active_job_id = None
 
+    def start_transfer_job(self, instance: str, orders: dict, password: str = None) -> str:
+        with self._lock:
+            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
+                raise RuntimeError("A job is already running")
+
+            job_id = str(uuid.uuid4())[:8]
+            progress_q = queue.Queue()
+            job = {
+                "job_id": job_id,
+                "status": "running",
+                "mode": "transfer",
+                "cube_name": f"{len(orders)} cubes",
+                "instance": instance,
+                "progress_queue": progress_q,
+                "cancel_event": threading.Event(),
+                "tm1_holder": {},
+                "started_at": time.time(),
+                "completed_at": None,
+                "result_files": [],
+                "error": None,
+                "final_event": None,
+            }
+            self._jobs[job_id] = job
+            self._active_job_id = job_id
+
+            thread = threading.Thread(
+                target=self._run_transfer_job,
+                args=(job_id, instance, orders, password),
+                daemon=True,
+            )
+            thread.start()
+            return job_id
+
+    def _run_transfer_job(self, job_id: str, instance: str, orders: dict, password: str):
+        job = self._jobs[job_id]
+        handler = JobLogHandler(job["progress_queue"])
+        handler.setLevel(logging.INFO)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+
+        results = []
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                total = len(orders)
+                for idx, (cube_name, dim_order) in enumerate(orders.items(), 1):
+                    job["progress_queue"].put({
+                        "event": "applying",
+                        "data": {"cube": cube_name, "index": idx, "total": total}
+                    })
+                    try:
+                        tm1.cubes.update_storage_dimension_order(cube_name, dim_order)
+                        results.append({"cube": cube_name, "success": True})
+                        logging.info(f"Applied dimension order to '{cube_name}' ({idx}/{total})")
+                    except Exception as e:
+                        results.append({"cube": cube_name, "success": False, "error": str(e)})
+                        logging.error(f"Failed to apply order to '{cube_name}': {e}")
+
+                    job["progress_queue"].put({
+                        "event": "applied",
+                        "data": results[-1]
+                    })
+
+            final_event = {
+                "event": "complete",
+                "data": {"results": results}
+            }
+            with self._lock:
+                job["status"] = "completed"
+                job["final_event"] = final_event
+            job["progress_queue"].put(final_event)
+
+        except Exception as e:
+            final_event = {
+                "event": "error_event",
+                "data": {"error": str(e)}
+            }
+            with self._lock:
+                job["status"] = "failed"
+                job["error"] = str(e)
+                job["final_event"] = final_event
+            job["progress_queue"].put(final_event)
+
+        finally:
+            with self._lock:
+                job["completed_at"] = time.time()
+            job["progress_queue"].put(None)  # Sentinel
+            root_logger.removeHandler(handler)
+            with self._lock:
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
     def cancel_job(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -345,9 +436,19 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/job/") and path.endswith("/cancel"):
             job_id = path.split("/")[3]
             return self._handle_cancel_job(job_id)
+        elif path == "/api/instances":
+            return self._handle_create_instance(body)
         elif path.startswith("/api/instance/"):
             instance_name = unquote(path[len("/api/instance/"):])
             return self._handle_update_instance(instance_name, body)
+        elif path == "/api/transfer/scan":
+            return self._handle_transfer_scan(body)
+        elif path == "/api/transfer/target-orders":
+            return self._handle_transfer_target_orders(body)
+        elif path == "/api/transfer/apply":
+            return self._handle_transfer_apply(body)
+        elif path == "/api/transfer/export":
+            return self._handle_transfer_export(body)
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -356,6 +457,15 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/config/"):
             filename = unquote(path[len("/api/config/"):])
             return self._handle_delete_config(filename)
+        elif path.startswith("/api/instance/") and "/field/" in path:
+            # DELETE /api/instance/<name>/field/<key>
+            parts = path[len("/api/instance/"):].split("/field/", 1)
+            instance_name = unquote(parts[0])
+            field_key = unquote(parts[1])
+            return self._handle_delete_instance_field(instance_name, field_key)
+        elif path.startswith("/api/instance/"):
+            instance_name = unquote(path[len("/api/instance/"):])
+            return self._handle_delete_instance(instance_name)
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -455,6 +565,52 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[instance_name][key] = str(value)
+            with open(_config_ini_path, "w") as f:
+                config.write(f)
+            self._send_json(200, {"success": True})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_create_instance(self, body: dict):
+        name = body.get("name", "").strip()
+        if not name:
+            return self._send_json(400, {"error": "Missing 'name'"})
+        if "]" in name:
+            return self._send_json(400, {"error": "Instance name must not contain ']'"})
+        try:
+            config = get_tm1_config(_config_ini_path)
+            if name in config:
+                return self._send_json(409, {"error": f"Instance '{name}' already exists"})
+            config.add_section(name)
+            params = body.get("params", {})
+            for key, value in params.items():
+                config[name][key] = str(value)
+            with open(_config_ini_path, "w") as f:
+                config.write(f)
+            self._send_json(200, {"success": True})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_delete_instance(self, instance_name: str):
+        try:
+            config = get_tm1_config(_config_ini_path)
+            if instance_name not in config:
+                return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
+            config.remove_section(instance_name)
+            with open(_config_ini_path, "w") as f:
+                config.write(f)
+            self._send_json(200, {"success": True})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_delete_instance_field(self, instance_name: str, field_key: str):
+        try:
+            config = get_tm1_config(_config_ini_path)
+            if instance_name not in config:
+                return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
+            if field_key not in config[instance_name]:
+                return self._send_json(404, {"error": f"Field '{field_key}' not found"})
+            config.remove_option(instance_name, field_key)
             with open(_config_ini_path, "w") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
@@ -751,6 +907,84 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                     break
             except (BrokenPipeError, ConnectionResetError):
                 break
+
+    def _handle_transfer_scan(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        ram_percent = body.get("ram_percent", 60)
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized=True)
+                self._send_json(200, data)
+        except Exception as e:
+            self._send_json(500, {"error": f"Scan failed: {e}"})
+
+    def _handle_transfer_target_orders(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        cubes = body.get("cubes", [])
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        if not cubes:
+            return self._send_json(400, {"error": "Missing 'cubes'"})
+        try:
+            with _create_tm1_connection(instance, password) as tm1:
+                orders = {}
+                missing = []
+                for cube_name in cubes:
+                    if not tm1.cubes.exists(cube_name):
+                        missing.append(cube_name)
+                        continue
+                    storage_order = tm1.cubes.get_storage_dimension_order(cube_name=cube_name)
+                    orders[cube_name] = list(storage_order)
+                self._send_json(200, {"orders": orders, "missing": missing})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_transfer_apply(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        orders = body.get("orders", {})
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        if not orders:
+            return self._send_json(400, {"error": "Missing 'orders'"})
+        try:
+            job_id = job_manager.start_transfer_job(instance, orders, password)
+            self._send_json(200, {"job_id": job_id, "status": "running"})
+        except RuntimeError as e:
+            self._send_json(409, {"error": str(e)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_transfer_export(self, body: dict):
+        instance = body.get("instance", "")
+        orders = body.get("orders", {})
+        if not orders:
+            return self._send_json(400, {"error": "Missing 'orders'"})
+        try:
+            export_dir = Path("exports")
+            export_dir.mkdir(exist_ok=True)
+            files = []
+            for cube_name, dim_order in orders.items():
+                safe_name = "".join(c for c in cube_name if c.isalnum() or c in "._-")
+                safe_name = safe_name.strip() or "cube"
+                config_data = {
+                    "instance": instance,
+                    "cube": cube_name,
+                    "predefined_orders": [dim_order],
+                    "executions": 1,
+                    "output": "csv",
+                }
+                file_path = export_dir / f"{safe_name}.json"
+                with open(file_path, "w") as f:
+                    json.dump(config_data, f, indent=2)
+                files.append(str(file_path))
+            self._send_json(200, {"files": files})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
 
     def _handle_list_results(self):
         results = []
