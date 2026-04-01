@@ -3595,14 +3595,363 @@ const OptimusPy = (function () {
   // TransferPage (placeholder — full implementation in Tasks 6+7)
   // ==================================================================
   const TransferPage = {
+    _sourceInstance: null,
+    _sourcePassword: null,
+    _sourceConnected: false,
+    _sourceCubes: [],
+    _selectedCubes: new Set(),
+
+    _targetInstance: null,
+    _targetPassword: null,
+    _targetConnected: false,
+    _targetOrders: {},
+    _transferredCubes: {},
+    _targetMissing: [],
+
+    _filterOptimized: true,
+    _filterNotOptimized: true,
+
     mount() {
       const page = $("#page-transfer");
       page.innerHTML = "";
+
       page.appendChild(el("div", { className: "page-header" },
         el("h1", { className: "page-title" }, "Dimension Order Transfer"),
-        el("p", { className: "text-secondary text-sm mt-1" }, "Transfer page — coming soon"),
+        el("p", { className: "text-secondary text-sm mt-1" }, "Transfer optimized dimension orders from a source instance to a target instance"),
       ));
+
+      const panels = el("div", { className: "transfer-panels" });
+
+      const sourcePanel = el("div", { className: "transfer-panel transfer-source" });
+      sourcePanel.appendChild(el("div", { className: "transfer-panel-header" }, "Source Instance"));
+      this._buildSourcePanel(sourcePanel);
+      panels.appendChild(sourcePanel);
+
+      const targetPanel = el("div", { className: "transfer-panel transfer-target" });
+      targetPanel.appendChild(el("div", { className: "transfer-panel-header" }, "Target Instance"));
+      this._buildTargetPanel(targetPanel);
+      panels.appendChild(targetPanel);
+
+      page.appendChild(panels);
     },
+
+    _buildSourcePanel(panel) {
+      const connRow = el("div", { className: "transfer-connect-row" });
+      const instanceSelect = el("select", { className: "form-input", id: "transfer-source-instance" });
+      instanceSelect.appendChild(el("option", { value: "" }, "Select instance..."));
+      state.instances.forEach(name => {
+        instanceSelect.appendChild(el("option", { value: name }, name));
+      });
+      if (this._sourceInstance) instanceSelect.value = this._sourceInstance;
+      connRow.appendChild(instanceSelect);
+
+      const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Password (optional)", id: "transfer-source-pw" });
+      if (this._sourcePassword) pwInput.value = this._sourcePassword;
+      connRow.appendChild(pwInput);
+
+      const connectBtn = el("button", { className: "btn btn-primary btn-sm", onClick: async () => {
+        const inst = instanceSelect.value;
+        if (!inst) { Toast.error("Select a source instance"); return; }
+        this._sourceInstance = inst;
+        this._sourcePassword = pwInput.value || null;
+        connectBtn.disabled = true;
+        connectBtn.textContent = "Scanning...";
+        try {
+          const data = await Api.transferScan(inst, this._sourcePassword, 100);
+          this._sourceCubes = data.candidates || [];
+          this._sourceConnected = true;
+          this._selectedCubes.clear();
+          Toast.success(`Scanned ${this._sourceCubes.length} cubes`);
+          this.mount();
+        } catch (err) {
+          Toast.error(err.message);
+          connectBtn.disabled = false;
+          connectBtn.textContent = "Connect & Scan";
+        }
+      }}, "Connect & Scan");
+      connRow.appendChild(connectBtn);
+      panel.appendChild(connRow);
+
+      if (!this._sourceConnected) return;
+
+      const filterBar = el("div", { className: "transfer-filter-bar" });
+
+      const optCb = el("input", { type: "checkbox", id: "filter-optimized" });
+      optCb.checked = this._filterOptimized;
+      optCb.addEventListener("change", () => { this._filterOptimized = optCb.checked; this._renderSourceList(listContainer); });
+      filterBar.appendChild(el("label", { className: "flex items-center gap-1 text-sm" }, optCb, "Optimized"));
+
+      const notOptCb = el("input", { type: "checkbox", id: "filter-not-optimized" });
+      notOptCb.checked = this._filterNotOptimized;
+      notOptCb.addEventListener("change", () => { this._filterNotOptimized = notOptCb.checked; this._renderSourceList(listContainer); });
+      filterBar.appendChild(el("label", { className: "flex items-center gap-1 text-sm" }, notOptCb, "Not Optimized"));
+
+      filterBar.appendChild(el("button", { className: "btn btn-ghost btn-sm", onClick: () => {
+        this._filteredCubes().forEach(c => this._selectedCubes.add(c.cube_name));
+        this._renderSourceList(listContainer);
+      }}, "Select All"));
+
+      filterBar.appendChild(el("button", { className: "btn btn-ghost btn-sm", onClick: () => {
+        this._selectedCubes.clear();
+        this._renderSourceList(listContainer);
+      }}, "Unselect All"));
+
+      panel.appendChild(filterBar);
+
+      const listContainer = el("div", { className: "transfer-cube-list" });
+      this._renderSourceList(listContainer);
+      panel.appendChild(listContainer);
+
+      const transferBtn = el("button", { className: "btn btn-primary mt-3", onClick: () => {
+        if (this._selectedCubes.size === 0) { Toast.error("Select at least one cube"); return; }
+        this._addToTarget();
+      }}, el("span", { html: Icons.arrowRight }), ` Transfer ${this._selectedCubes.size} cube(s)`);
+      panel.appendChild(transferBtn);
+    },
+
+    _filteredCubes() {
+      return this._sourceCubes.filter(c => {
+        if (c.already_optimized && !this._filterOptimized) return false;
+        if (!c.already_optimized && !this._filterNotOptimized) return false;
+        return true;
+      });
+    },
+
+    _renderSourceList(container) {
+      container.innerHTML = "";
+      const filtered = this._filteredCubes();
+      if (filtered.length === 0) {
+        container.appendChild(el("div", { className: "text-secondary text-sm p-2" }, "No cubes match filters"));
+        return;
+      }
+      filtered.forEach(cube => {
+        const row = el("div", {
+          className: "transfer-cube-row",
+          draggable: "true",
+          dataset: { cubeName: cube.cube_name },
+        });
+        row.addEventListener("dragstart", (e) => {
+          if (!this._selectedCubes.has(cube.cube_name)) {
+            this._selectedCubes.add(cube.cube_name);
+          }
+          e.dataTransfer.setData("text/plain", JSON.stringify(
+            [...this._selectedCubes].map(name => {
+              const c = this._sourceCubes.find(sc => sc.cube_name === name);
+              return { cube_name: name, storage_order: c ? c.storage_order : [] };
+            })
+          ));
+          e.dataTransfer.effectAllowed = "copy";
+        });
+
+        const cb = el("input", { type: "checkbox" });
+        cb.checked = this._selectedCubes.has(cube.cube_name);
+        cb.addEventListener("change", () => {
+          if (cb.checked) this._selectedCubes.add(cube.cube_name);
+          else this._selectedCubes.delete(cube.cube_name);
+          const btn = $(".transfer-source .btn-primary.mt-3");
+          if (btn) btn.lastChild.textContent = ` Transfer ${this._selectedCubes.size} cube(s)`;
+        });
+        row.appendChild(cb);
+
+        const info = el("div", { className: "transfer-cube-info" });
+        info.appendChild(el("div", { className: "font-medium text-sm" }, cube.cube_name));
+        const meta = `${cube.dim_count} dims | ${cube.ram_gb.toFixed(2)} GB`;
+        const badge = cube.already_optimized
+          ? el("span", { className: "badge badge-success", style: "font-size:9px;margin-left:4px" }, "optimized")
+          : null;
+        info.appendChild(el("div", { className: "text-xs text-tertiary" }, meta, badge));
+        row.appendChild(info);
+
+        container.appendChild(row);
+      });
+    },
+
+    async _addToTarget() {
+      const selected = [...this._selectedCubes];
+      selected.forEach(name => {
+        const cube = this._sourceCubes.find(c => c.cube_name === name);
+        if (cube && !this._transferredCubes[name]) {
+          this._transferredCubes[name] = {
+            proposed: cube.storage_order,
+            current: null,
+          };
+        }
+      });
+      if (this._targetConnected) {
+        await this._fetchTargetOrders(selected);
+      }
+      this.mount();
+    },
+
+    _buildTargetPanel(panel) {
+      const connRow = el("div", { className: "transfer-connect-row" });
+      const instanceSelect = el("select", { className: "form-input", id: "transfer-target-instance" });
+      instanceSelect.appendChild(el("option", { value: "" }, "Select instance..."));
+      state.instances.forEach(name => {
+        instanceSelect.appendChild(el("option", { value: name }, name));
+      });
+      if (this._targetInstance) instanceSelect.value = this._targetInstance;
+      connRow.appendChild(instanceSelect);
+
+      const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Password (optional)", id: "transfer-target-pw" });
+      if (this._targetPassword) pwInput.value = this._targetPassword;
+      connRow.appendChild(pwInput);
+
+      const connectBtn = el("button", { className: "btn btn-primary btn-sm", onClick: async () => {
+        const inst = instanceSelect.value;
+        if (!inst) { Toast.error("Select a target instance"); return; }
+        this._targetInstance = inst;
+        this._targetPassword = pwInput.value || null;
+        this._targetConnected = true;
+        if (this._sourceInstance && this._targetInstance === this._sourceInstance) {
+          Toast.info("Source and target are the same instance");
+        }
+        const cubeNames = Object.keys(this._transferredCubes);
+        if (cubeNames.length > 0) {
+          await this._fetchTargetOrders(cubeNames);
+        }
+        Toast.success(`Connected to target: ${inst}`);
+        this.mount();
+      }}, "Connect");
+      connRow.appendChild(connectBtn);
+      panel.appendChild(connRow);
+
+      const dropZone = el("div", { className: "transfer-drop-zone" });
+      dropZone.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; dropZone.classList.add("drag-over"); });
+      dropZone.addEventListener("dragleave", () => { dropZone.classList.remove("drag-over"); });
+      dropZone.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("drag-over");
+        try {
+          const cubes = JSON.parse(e.dataTransfer.getData("text/plain"));
+          cubes.forEach(c => {
+            if (!this._transferredCubes[c.cube_name]) {
+              this._transferredCubes[c.cube_name] = { proposed: c.storage_order, current: null };
+            }
+          });
+          if (this._targetConnected) {
+            await this._fetchTargetOrders(cubes.map(c => c.cube_name));
+          }
+          this.mount();
+        } catch (err) {
+          Toast.error("Invalid drop data");
+        }
+      });
+
+      const transferredNames = Object.keys(this._transferredCubes);
+      if (transferredNames.length === 0) {
+        dropZone.appendChild(el("div", { className: "transfer-drop-placeholder" },
+          el("span", { html: Icons.arrowRight, style: "opacity:0.3" }),
+          el("div", { className: "text-secondary text-sm mt-2" }, "Drag cubes here or use the Transfer button"),
+        ));
+      } else {
+        transferredNames.forEach(cubeName => {
+          const cube = this._transferredCubes[cubeName];
+          const card = el("div", { className: "transfer-target-card" });
+
+          const header = el("div", { className: "flex items-center justify-between mb-2" });
+          header.appendChild(el("div", { className: "font-medium text-sm" }, cubeName));
+          header.appendChild(el("button", { className: "btn btn-ghost btn-sm", html: Icons.x, onClick: () => {
+            delete this._transferredCubes[cubeName];
+            this.mount();
+          }}));
+          card.appendChild(header);
+
+          if (this._targetMissing.includes(cubeName)) {
+            card.appendChild(el("div", { className: "text-warning text-xs mb-1" }, "Cube not found on target instance"));
+          }
+
+          const comparison = el("div", { className: "transfer-order-comparison" });
+
+          const currentCol = el("div", { className: "transfer-order-col" });
+          currentCol.appendChild(el("div", { className: "text-xs text-tertiary mb-1" }, "Current (Target)"));
+          if (cube.current) {
+            cube.current.forEach(dim => currentCol.appendChild(el("div", { className: "transfer-dim-tag dim-current" }, dim)));
+          } else {
+            currentCol.appendChild(el("div", { className: "text-xs text-tertiary" }, this._targetConnected ? "Loading..." : "Connect target to see"));
+          }
+          comparison.appendChild(currentCol);
+
+          comparison.appendChild(el("div", { className: "transfer-order-arrow", html: Icons.arrowRight }));
+
+          const proposedCol = el("div", { className: "transfer-order-col" });
+          proposedCol.appendChild(el("div", { className: "text-xs text-tertiary mb-1" }, "Proposed (Source)"));
+          cube.proposed.forEach((dim, i) => {
+            const changed = cube.current && cube.current[i] !== dim;
+            proposedCol.appendChild(el("div", { className: `transfer-dim-tag dim-proposed${changed ? " dim-changed" : ""}` }, dim));
+          });
+          comparison.appendChild(proposedCol);
+
+          card.appendChild(comparison);
+          dropZone.appendChild(card);
+        });
+      }
+      panel.appendChild(dropZone);
+
+      if (transferredNames.length > 0) {
+        const actionsRow = el("div", { className: "flex gap-2 mt-3 flex-wrap" });
+
+        const applyBtn = el("button", { className: "btn btn-primary", onClick: async () => {
+          if (!this._targetConnected) { Toast.error("Connect to target instance first"); return; }
+          const orders = {};
+          Object.entries(this._transferredCubes).forEach(([name, cube]) => {
+            if (!this._targetMissing.includes(name)) {
+              orders[name] = cube.proposed;
+            }
+          });
+          if (Object.keys(orders).length === 0) { Toast.error("No valid cubes to apply"); return; }
+          applyBtn.disabled = true;
+          applyBtn.textContent = "Applying...";
+          try {
+            const resp = await Api.transferApply(this._targetInstance, this._targetPassword, orders);
+            Toast.success(`Transfer job started (${resp.job_id})`);
+            Router.navigate("#/jobs");
+          } catch (err) {
+            Toast.error(err.message);
+            applyBtn.disabled = false;
+            applyBtn.textContent = "Apply All";
+          }
+        }}, "Apply All");
+        actionsRow.appendChild(applyBtn);
+
+        const exportBtn = el("button", { className: "btn btn-secondary", onClick: async () => {
+          const orders = {};
+          Object.entries(this._transferredCubes).forEach(([name, cube]) => {
+            orders[name] = cube.proposed;
+          });
+          try {
+            const resp = await Api.transferExport(this._targetInstance || this._sourceInstance || "", orders);
+            Toast.success(`Exported ${resp.files.length} file(s) to exports/`);
+          } catch (err) {
+            Toast.error(err.message);
+          }
+        }}, el("span", { html: Icons.download }), " Export to Folder");
+        actionsRow.appendChild(exportBtn);
+
+        actionsRow.appendChild(el("button", { className: "btn btn-ghost", onClick: () => {
+          this._transferredCubes = {};
+          this._targetMissing = [];
+          this.mount();
+        }}, "Clear All"));
+
+        panel.appendChild(actionsRow);
+      }
+    },
+
+    async _fetchTargetOrders(cubeNames) {
+      try {
+        const data = await Api.transferTargetOrders(this._targetInstance, this._targetPassword, cubeNames);
+        Object.entries(data.orders || {}).forEach(([name, order]) => {
+          if (this._transferredCubes[name]) {
+            this._transferredCubes[name].current = order;
+          }
+        });
+        this._targetMissing = [...new Set([...this._targetMissing, ...(data.missing || [])])];
+      } catch (err) {
+        Toast.error(`Failed to fetch target orders: ${err.message}`);
+      }
+    },
+
     unmount() {},
   };
 
