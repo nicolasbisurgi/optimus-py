@@ -3605,7 +3605,7 @@ const OptimusPy = (function () {
     _transferredCubes: {},
     _targetMissing: [],
 
-    _includeOptimized: false,
+    _includeOptimized: true,
 
     mount() {
       const page = $("#page-transfer");
