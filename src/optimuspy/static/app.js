@@ -1593,7 +1593,7 @@ const OptimusPy = (function () {
       });
 
       // Update title
-      const titles = { home: "Home", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Sync Order" };
+      const titles = { home: "Optimize", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Sync Order" };
       document.title = `OptimusPy — ${titles[pageName] || "Dashboard"}`;
 
       // Mount
@@ -3596,20 +3596,16 @@ const OptimusPy = (function () {
   // ==================================================================
   const TransferPage = {
     _sourceInstance: null,
-    _sourcePassword: null,
     _sourceConnected: false,
     _sourceCubes: [],
-    _selectedCubes: new Set(),
 
     _targetInstance: null,
-    _targetPassword: null,
     _targetConnected: false,
     _targetOrders: {},
     _transferredCubes: {},
     _targetMissing: [],
 
-    _filterOptimized: true,
-    _filterNotOptimized: true,
+    _includeOptimized: false,
 
     mount() {
       const page = $("#page-transfer");
@@ -3645,22 +3641,16 @@ const OptimusPy = (function () {
       if (this._sourceInstance) instanceSelect.value = this._sourceInstance;
       connRow.appendChild(instanceSelect);
 
-      const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Password (optional)", id: "transfer-source-pw" });
-      if (this._sourcePassword) pwInput.value = this._sourcePassword;
-      connRow.appendChild(pwInput);
-
       const connectBtn = el("button", { className: "btn btn-primary btn-sm", onClick: async () => {
         const inst = instanceSelect.value;
         if (!inst) { Toast.error("Select a source instance"); return; }
         this._sourceInstance = inst;
-        this._sourcePassword = pwInput.value || null;
         connectBtn.disabled = true;
         connectBtn.textContent = "Scanning...";
         try {
-          const data = await Api.transferScan(inst, this._sourcePassword, 100);
+          const data = await Api.transferScan(inst, null, 100);
           this._sourceCubes = data.candidates || [];
           this._sourceConnected = true;
-          this._selectedCubes.clear();
           Toast.success(`Scanned ${this._sourceCubes.length} cubes`);
           this.mount();
         } catch (err) {
@@ -3676,43 +3666,21 @@ const OptimusPy = (function () {
 
       const filterBar = el("div", { className: "transfer-filter-bar" });
 
-      const optCb = el("input", { type: "checkbox", id: "filter-optimized" });
-      optCb.checked = this._filterOptimized;
-      optCb.addEventListener("change", () => { this._filterOptimized = optCb.checked; this._renderSourceList(listContainer); });
-      filterBar.appendChild(el("label", { className: "flex items-center gap-1 text-sm" }, optCb, "Optimized"));
-
-      const notOptCb = el("input", { type: "checkbox", id: "filter-not-optimized" });
-      notOptCb.checked = this._filterNotOptimized;
-      notOptCb.addEventListener("change", () => { this._filterNotOptimized = notOptCb.checked; this._renderSourceList(listContainer); });
-      filterBar.appendChild(el("label", { className: "flex items-center gap-1 text-sm" }, notOptCb, "Not Optimized"));
-
-      filterBar.appendChild(el("button", { className: "btn btn-ghost btn-sm", onClick: () => {
-        this._filteredCubes().forEach(c => this._selectedCubes.add(c.cube_name));
-        this._renderSourceList(listContainer);
-      }}, "Select All"));
-
-      filterBar.appendChild(el("button", { className: "btn btn-ghost btn-sm", onClick: () => {
-        this._selectedCubes.clear();
-        this._renderSourceList(listContainer);
-      }}, "Unselect All"));
+      const inclOptCb = el("input", { type: "checkbox", id: "filter-include-optimized" });
+      inclOptCb.checked = this._includeOptimized;
+      inclOptCb.addEventListener("change", () => { this._includeOptimized = inclOptCb.checked; this._renderSourceList(listContainer); });
+      filterBar.appendChild(el("label", { className: "flex items-center gap-1 text-sm" }, inclOptCb, "Include Optimized"));
 
       panel.appendChild(filterBar);
 
       const listContainer = el("div", { className: "transfer-cube-list" });
       this._renderSourceList(listContainer);
       panel.appendChild(listContainer);
-
-      const transferBtn = el("button", { className: "btn btn-primary mt-3", onClick: () => {
-        if (this._selectedCubes.size === 0) { Toast.error("Select at least one cube"); return; }
-        this._addToTarget();
-      }}, el("span", { html: Icons.arrowRight }), ` Transfer ${this._selectedCubes.size} cube(s)`);
-      panel.appendChild(transferBtn);
     },
 
     _filteredCubes() {
       return this._sourceCubes.filter(c => {
-        if (c.already_optimized && !this._filterOptimized) return false;
-        if (!c.already_optimized && !this._filterNotOptimized) return false;
+        if (c.already_optimized && !this._includeOptimized) return false;
         return true;
       });
     },
@@ -3731,27 +3699,11 @@ const OptimusPy = (function () {
           dataset: { cubeName: cube.cube_name },
         });
         row.addEventListener("dragstart", (e) => {
-          if (!this._selectedCubes.has(cube.cube_name)) {
-            this._selectedCubes.add(cube.cube_name);
-          }
           e.dataTransfer.setData("text/plain", JSON.stringify(
-            [...this._selectedCubes].map(name => {
-              const c = this._sourceCubes.find(sc => sc.cube_name === name);
-              return { cube_name: name, storage_order: c ? c.storage_order : [] };
-            })
+            [{ cube_name: cube.cube_name, storage_order: cube.storage_order }]
           ));
           e.dataTransfer.effectAllowed = "copy";
         });
-
-        const cb = el("input", { type: "checkbox" });
-        cb.checked = this._selectedCubes.has(cube.cube_name);
-        cb.addEventListener("change", () => {
-          if (cb.checked) this._selectedCubes.add(cube.cube_name);
-          else this._selectedCubes.delete(cube.cube_name);
-          const btn = $(".transfer-source .btn-primary.mt-3");
-          if (btn) btn.lastChild.textContent = ` Transfer ${this._selectedCubes.size} cube(s)`;
-        });
-        row.appendChild(cb);
 
         const info = el("div", { className: "transfer-cube-info" });
         info.appendChild(el("div", { className: "font-medium text-sm" }, cube.cube_name));
@@ -3766,9 +3718,8 @@ const OptimusPy = (function () {
       });
     },
 
-    async _addToTarget() {
-      const selected = [...this._selectedCubes];
-      selected.forEach(name => {
+    async _addToTarget(cubeNames) {
+      cubeNames.forEach(name => {
         const cube = this._sourceCubes.find(c => c.cube_name === name);
         if (cube && !this._transferredCubes[name]) {
           this._transferredCubes[name] = {
@@ -3793,15 +3744,10 @@ const OptimusPy = (function () {
       if (this._targetInstance) instanceSelect.value = this._targetInstance;
       connRow.appendChild(instanceSelect);
 
-      const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Password (optional)", id: "transfer-target-pw" });
-      if (this._targetPassword) pwInput.value = this._targetPassword;
-      connRow.appendChild(pwInput);
-
       const connectBtn = el("button", { className: "btn btn-primary btn-sm", onClick: async () => {
         const inst = instanceSelect.value;
         if (!inst) { Toast.error("Select a target instance"); return; }
         this._targetInstance = inst;
-        this._targetPassword = pwInput.value || null;
         this._targetConnected = true;
         if (this._sourceInstance && this._targetInstance === this._sourceInstance) {
           Toast.info("Source and target are the same instance");
@@ -3903,7 +3849,7 @@ const OptimusPy = (function () {
           applyBtn.disabled = true;
           applyBtn.textContent = "Applying...";
           try {
-            const resp = await Api.transferApply(this._targetInstance, this._targetPassword, orders);
+            const resp = await Api.transferApply(this._targetInstance, null, orders);
             Toast.success(`Transfer job started (${resp.job_id})`);
             Router.navigate("#/jobs");
           } catch (err) {
@@ -3940,7 +3886,7 @@ const OptimusPy = (function () {
 
     async _fetchTargetOrders(cubeNames) {
       try {
-        const data = await Api.transferTargetOrders(this._targetInstance, this._targetPassword, cubeNames);
+        const data = await Api.transferTargetOrders(this._targetInstance, null, cubeNames);
         Object.entries(data.orders || {}).forEach(([name, order]) => {
           if (this._transferredCubes[name]) {
             this._transferredCubes[name].current = order;
