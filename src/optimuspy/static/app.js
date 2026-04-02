@@ -821,7 +821,7 @@ const OptimusPy = (function () {
 
     // ── Modal: build a predefined order ──
     function _showPredefinedOrderModal() {
-      const modalDims = _dims.filter(d => d.included).map(d => d.name);
+      const modalDims = _dims.filter(d => d.included).map(d => ({ name: d.name, meta: d.meta }));
       let dragIdx = null;
 
       const body = el("div");
@@ -833,12 +833,17 @@ const OptimusPy = (function () {
 
       function renderModalList() {
         list.innerHTML = "";
-        modalDims.forEach((name, i) => {
+        modalDims.forEach((dim, i) => {
           const card = el("div", { className: "dim-card" });
           card.setAttribute("draggable", "true");
           card.appendChild(el("span", { className: "drag-handle", html: Icons.gripVertical }));
           card.appendChild(el("span", { className: "dim-card-pos-label" }, `${i + 1}.`));
-          card.appendChild(el("span", { className: "dim-card-name" }, name));
+          card.appendChild(el("span", { className: "dim-card-name" }, dim.name));
+          const leafCount = dim.meta.leaf_elements;
+          if (leafCount != null) {
+            card.appendChild(el("span", { className: "dim-card-elements text-tertiary", style: "margin-left:auto;font-size:11px;" },
+              `${leafCount.toLocaleString()} elements`));
+          }
 
           card.addEventListener("dragstart", e => {
             dragIdx = i;
@@ -884,7 +889,7 @@ const OptimusPy = (function () {
         footer: [
           el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
           el("button", { className: "btn btn-primary", onClick: () => {
-            _predefinedOrders.push([...modalDims]);
+            _predefinedOrders.push(modalDims.map(d => d.name));
             fire();
             render();
             Modal.close();
