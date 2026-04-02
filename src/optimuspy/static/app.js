@@ -4008,6 +4008,27 @@ const OptimusPy = (function () {
         }
       }
 
+      // Cache management
+      const cacheCard = el("div", { className: "card mb-4" });
+      cacheCard.appendChild(el("div", { className: "card-title mb-4" }, "Cache"));
+      cacheCard.appendChild(el("p", { className: "text-secondary text-sm mb-3" }, "Scan results and cube intelligence are cached locally. Clear the cache to force fresh data from the server."));
+      const clearCacheBtn = el("button", { className: "btn btn-secondary", onClick: () => {
+        // Clear localStorage caches
+        const keys = Object.keys(localStorage);
+        keys.forEach(k => {
+          if (k.startsWith("op-scan-") || k.startsWith("op-intel-")) {
+            localStorage.removeItem(k);
+          }
+        });
+        // Clear in-memory caches
+        state.scanData = null;
+        state.scanTimestamp = null;
+        state.cubeMetadata = {};
+        Toast.success("Cache cleared — scans and cube intelligence will be refreshed");
+      }}, "Clear Cache");
+      cacheCard.appendChild(clearCacheBtn);
+      page.appendChild(cacheCard);
+
       // Saved configs management
       const configsCard = el("div", { className: "card" });
       configsCard.appendChild(el("div", { className: "card-title mb-4" }, "Saved Cube Configs"));
