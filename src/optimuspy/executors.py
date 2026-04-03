@@ -90,6 +90,13 @@ class OptipyzerExecutor:
     def _evaluate_permutation(self, permutation: List[str], retrieve_ram: bool = False,
                               is_original_order: bool = False,
                               total_permutations=None) -> PermutationResult:
+        if is_original_order:
+            progress_label = "Original Order"
+        else:
+            progress_label = f"Iteration {self.context.counter - 2} of {total_permutations}"
+
+        logging.info(f"{progress_label} - Testing order: {permutation}")
+
         reorder_start = time.time()
         ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(self.cube_name, permutation)
         reorder_duration = time.time() - reorder_start
@@ -108,21 +115,15 @@ class OptipyzerExecutor:
             permutation, query_times_by_view, process_times_by_process, ram_usage,
             ram_percentage_change, reorder_duration)
 
-        if is_original_order:
-            progress_log = "Original Order"
-        else:
-            progress_log = f"Iteration {self.context.counter - 2} of {total_permutations}"
-
         query_log = ""
         if self.view_names:
-            query_log = f" - Composite query time [s]: {permutation_result.composite_query_time():.5f}"
+            query_log = f" - Query [s]: {permutation_result.composite_query_time():.5f}"
 
         process_log = ""
         if self.include_process:
-            process_log = f" - Composite process time [s]: {permutation_result.composite_process_time():.5f}"
+            process_log = f" - Process [s]: {permutation_result.composite_process_time():.5f}"
 
-        logging.info(f"{progress_log} - Evaluated order: {permutation} "
-                     f"- RAM [GB]: {permutation_result.ram_usage / 1024 ** 3:.2f}"
+        logging.info(f"{progress_label} - Result: RAM [GB]: {permutation_result.ram_usage / 1024 ** 3:.2f}"
                      + query_log + process_log)
 
         return permutation_result
@@ -319,12 +320,12 @@ class MainExecutor(OptipyzerExecutor):
 
                     # skip ignored orders
                     if permutation in self.orders_to_ignore:
-                        logging.info(f"Skipping ignored order: {permutation}")
+                        logging.debug(f"Skipping ignored order: {permutation}")
                         continue
 
                     # skip orders violating position rules
                     if self._violates_position_rules(permutation):
-                        logging.info(f"Skipping order due to position rule violation: {permutation}")
+                        logging.debug(f"Skipping order due to position rule violation: {permutation}")
                         continue
 
                     self._check_cancelled()
