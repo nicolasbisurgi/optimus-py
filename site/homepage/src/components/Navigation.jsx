@@ -32,7 +32,12 @@ export default function Navigation() {
           </div>
 
           {/* Mobile toggle */}
-          <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="md:hidden text-text-primary p-2">
+          <button
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            aria-label="Toggle navigation menu"
+            aria-expanded={isMenuOpen}
+            className="md:hidden text-text-primary p-2"
+          >
             {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
         </div>
