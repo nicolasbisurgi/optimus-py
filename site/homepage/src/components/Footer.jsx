@@ -21,12 +21,14 @@ export default function Footer() {
             </p>
             <div className="flex items-center space-x-4">
               <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
+                 aria-label="OptimusPy on GitHub"
                  className="text-text-muted hover:text-text-primary transition-colors">
-                <Github className="w-5 h-5" />
+                <Github className="w-5 h-5" aria-hidden="true" />
               </a>
               <a href={PYPI_URL} target="_blank" rel="noopener noreferrer"
+                 aria-label="OptimusPy on PyPI"
                  className="text-text-muted hover:text-text-primary transition-colors">
-                <Package className="w-5 h-5" />
+                <Package className="w-5 h-5" aria-hidden="true" />
               </a>
             </div>
           </div>
