@@ -3,7 +3,12 @@
 // Source classes: cls-1 (cyan letters O,p,t,i,m,u,s), cls-2 (orange→violet letters P,y),
 // cls-3/cls-4 (figure-8 marks with linearGradients — preserved as-is)
 
+import { useId } from 'react'
+
 export function OptimusPyLogo({ className = "", height = 40 }) {
+  const uid = useId()
+  const grad1 = `optimuspy-grad-1-${uid}`
+  const grad2 = `optimuspy-grad-2-${uid}`
   return (
     <svg
       className={className}
@@ -12,7 +17,7 @@ export function OptimusPyLogo({ className = "", height = 40 }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <linearGradient id="optimuspy-grad-1" x1="163.52" y1="588.21" x2="882.03" y2="588.21" gradientUnits="userSpaceOnUse">
+        <linearGradient id={grad1} x1="163.52" y1="588.21" x2="882.03" y2="588.21" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#00aeef"/>
           <stop offset="0.15" stopColor="#01a9ea"/>
           <stop offset="0.32" stopColor="#059cdc"/>
@@ -21,7 +26,7 @@ export function OptimusPyLogo({ className = "", height = 40 }) {
           <stop offset="0.89" stopColor="#1f3c7c"/>
           <stop offset="1" stopColor="#262262"/>
         </linearGradient>
-        <linearGradient id="optimuspy-grad-2" x1="163.52" y1="403.65" x2="882.03" y2="403.65" gradientUnits="userSpaceOnUse">
+        <linearGradient id={grad2} x1="163.52" y1="403.65" x2="882.03" y2="403.65" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#fff200"/>
           <stop offset="0.66" stopColor="#fbb040"/>
         </linearGradient>
@@ -45,14 +50,17 @@ export function OptimusPyLogo({ className = "", height = 40 }) {
       </g>
 
       {/* Figure-8 marks — preserve gradient fills */}
-      <path fill="url(#optimuspy-grad-1)" d="M702.41,857.66c-98.8,0-179.63-80.48-179.63-179.63V498.4c0,98.8-80.84,179.63-179.63,179.63S163.52,597.56,163.52,498.4V318.77c99.24,0,179.63,80.48,179.63,179.63,0-98.8,80.83-179.63,179.63-179.63,99.24,0,179.63,80.48,179.63,179.63V678H882C882,776.82,801.56,857.66,702.41,857.66Zm44.9-80.84a18,18,0,1,0,18,18A18,18,0,0,0,747.31,776.82Z"/>
-      <path fill="url(#optimuspy-grad-2)" d="M702.41,134.2c-98.8,0-179.63,80.48-179.63,179.63V493.46c0-98.8-80.84-179.63-179.63-179.63S163.52,394.31,163.52,493.46V673.09c99.24,0,179.63-80.47,179.63-179.63,0,98.8,80.83,179.63,179.63,179.63,99.24,0,179.63-80.48,179.63-179.63V313.83H882C882,215,801.56,134.2,702.41,134.2ZM747.31,215a18,18,0,1,1,18-18A18,18,0,0,1,747.31,215Z"/>
+      <path fill={`url(#${grad1})`} d="M702.41,857.66c-98.8,0-179.63-80.48-179.63-179.63V498.4c0,98.8-80.84,179.63-179.63,179.63S163.52,597.56,163.52,498.4V318.77c99.24,0,179.63,80.48,179.63,179.63,0-98.8,80.83-179.63,179.63-179.63,99.24,0,179.63,80.48,179.63,179.63V678H882C882,776.82,801.56,857.66,702.41,857.66Zm44.9-80.84a18,18,0,1,0,18,18A18,18,0,0,0,747.31,776.82Z"/>
+      <path fill={`url(#${grad2})`} d="M702.41,134.2c-98.8,0-179.63,80.48-179.63,179.63V493.46c0-98.8-80.84-179.63-179.63-179.63S163.52,394.31,163.52,493.46V673.09c99.24,0,179.63-80.47,179.63-179.63,0,98.8,80.83,179.63,179.63,179.63,99.24,0,179.63-80.48,179.63-179.63V313.83H882C882,215,801.56,134.2,702.41,134.2ZM747.31,215a18,18,0,1,1,18-18A18,18,0,0,1,747.31,215Z"/>
     </svg>
   );
 }
 
 // Icon-only version — just the two figure-8 marks
 export function OptimusPyIcon({ className = "", size = 40 }) {
+  const uid = useId()
+  const iconGrad1 = `optimuspy-icon-grad-1-${uid}`
+  const iconGrad2 = `optimuspy-icon-grad-2-${uid}`
   return (
     <svg
       className={className}
@@ -62,7 +70,7 @@ export function OptimusPyIcon({ className = "", size = 40 }) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
-        <linearGradient id="optimuspy-icon-grad-1" x1="163.52" y1="588.21" x2="882.03" y2="588.21" gradientUnits="userSpaceOnUse">
+        <linearGradient id={iconGrad1} x1="163.52" y1="588.21" x2="882.03" y2="588.21" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#00aeef"/>
           <stop offset="0.15" stopColor="#01a9ea"/>
           <stop offset="0.32" stopColor="#059cdc"/>
@@ -71,13 +79,13 @@ export function OptimusPyIcon({ className = "", size = 40 }) {
           <stop offset="0.89" stopColor="#1f3c7c"/>
           <stop offset="1" stopColor="#262262"/>
         </linearGradient>
-        <linearGradient id="optimuspy-icon-grad-2" x1="163.52" y1="403.65" x2="882.03" y2="403.65" gradientUnits="userSpaceOnUse">
+        <linearGradient id={iconGrad2} x1="163.52" y1="403.65" x2="882.03" y2="403.65" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#fff200"/>
           <stop offset="0.66" stopColor="#fbb040"/>
         </linearGradient>
       </defs>
-      <path fill="url(#optimuspy-icon-grad-1)" d="M702.41,857.66c-98.8,0-179.63-80.48-179.63-179.63V498.4c0,98.8-80.84,179.63-179.63,179.63S163.52,597.56,163.52,498.4V318.77c99.24,0,179.63,80.48,179.63,179.63,0-98.8,80.83-179.63,179.63-179.63,99.24,0,179.63,80.48,179.63,179.63V678H882C882,776.82,801.56,857.66,702.41,857.66Zm44.9-80.84a18,18,0,1,0,18,18A18,18,0,0,0,747.31,776.82Z"/>
-      <path fill="url(#optimuspy-icon-grad-2)" d="M702.41,134.2c-98.8,0-179.63,80.48-179.63,179.63V493.46c0-98.8-80.84-179.63-179.63-179.63S163.52,394.31,163.52,493.46V673.09c99.24,0,179.63-80.47,179.63-179.63,0,98.8,80.83,179.63,179.63,179.63,99.24,0,179.63-80.48,179.63-179.63V313.83H882C882,215,801.56,134.2,702.41,134.2ZM747.31,215a18,18,0,1,1,18-18A18,18,0,0,1,747.31,215Z"/>
+      <path fill={`url(#${iconGrad1})`} d="M702.41,857.66c-98.8,0-179.63-80.48-179.63-179.63V498.4c0,98.8-80.84,179.63-179.63,179.63S163.52,597.56,163.52,498.4V318.77c99.24,0,179.63,80.48,179.63,179.63,0-98.8,80.83-179.63,179.63-179.63,99.24,0,179.63,80.48,179.63,179.63V678H882C882,776.82,801.56,857.66,702.41,857.66Zm44.9-80.84a18,18,0,1,0,18,18A18,18,0,0,0,747.31,776.82Z"/>
+      <path fill={`url(#${iconGrad2})`} d="M702.41,134.2c-98.8,0-179.63,80.48-179.63,179.63V493.46c0-98.8-80.84-179.63-179.63-179.63S163.52,394.31,163.52,493.46V673.09c99.24,0,179.63-80.47,179.63-179.63,0,98.8,80.83,179.63,179.63,179.63,99.24,0,179.63-80.48,179.63-179.63V313.83H882C882,215,801.56,134.2,702.41,134.2ZM747.31,215a18,18,0,1,1,18-18A18,18,0,0,1,747.31,215Z"/>
     </svg>
   );
 }
