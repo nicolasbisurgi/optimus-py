@@ -21,6 +21,8 @@ export default function AnimatedUI() {
     <div
       className="relative w-full max-w-5xl mx-auto"
       style={{ perspective: '2000px', perspectiveOrigin: '50% 30%' }}
+      role="img"
+      aria-label="Mockup of the OptimusPy web UI Optimize page, showing a sidebar with five sections and a list of candidate cubes ranked by RAM."
     >
       {/* Browser chrome */}
       <div
