@@ -1,25 +1,99 @@
 # TM1 Connection
 
-Configure `config.ini` for on-premise and IBM Cloud TM1 instances. One section per instance.
-
-_This page is a placeholder — content coming soon._
+OptimusPy uses TM1py to connect to TM1 / Planning Analytics. Connections live in `config/config.ini` — one section per instance, freely-named (the section name is what you reference as `instance` in cube configs and in the UI).
 
 ## INI file format
 
-_This page is a placeholder — content coming soon._
+```ini
+[tm1srv01]
+address=localhost
+port=12354
+user=admin
+password=apple
+ssl=False
 
-## On-premise (address/port)
+[planning_sample]
+address=localhost
+port=12354
+user=Admin
+password=YXBwbGU=
+decode_b64=True
+ssl=True
+```
 
-_This page is a placeholder — content coming soon._
+Each `[section]` is independent. Add as many instances as you like — DEV, UAT, PROD, regional models, etc.
 
-## IBM Cloud (base_url/namespace)
+## On-premise (address / port)
 
-_This page is a placeholder — content coming soon._
+```ini
+[tm1srv01]
+address=tm1.example.com
+port=8010
+user=admin
+password=mypassword
+ssl=true
+async_requests_mode=true
+```
 
-## Encoded passwords (decode_b64)
+| Parameter | Description |
+|---|---|
+| `address` | Hostname or IP of the TM1 server |
+| `port` | TM1 REST API port (often 8010 / 12354 / 5021) |
+| `user` | TM1 user name |
+| `password` | Plaintext or base64-encoded password |
+| `ssl` | `true` for HTTPS, `false` for HTTP |
+| `async_requests_mode` | `true` recommended for long-running queries |
 
-_This page is a placeholder — content coming soon._
+## IBM Cloud / Planning Analytics on Cloud
+
+```ini
+[paac_prod]
+base_url=https://your-tenant.planning-analytics.cloud.ibm.com/tm1/api/TM1 PROD
+user=automation_user
+password=your_password
+namespace=LDAP
+ssl=true
+verify=true
+async_requests_mode=true
+```
+
+| Parameter | Description |
+|---|---|
+| `base_url` | Full PA-on-Cloud REST URL including the model name |
+| `namespace` | Authentication namespace (commonly `LDAP`) |
+| `verify` | `true` validates the TLS certificate (recommended) |
+
+!!! tip "Spaces in model names"
+    `base_url` may contain spaces (e.g. `…/tm1/api/TM1 PROD`). Do **not** URL-encode them — `configparser` reads the value as-is.
+
+## Encoded passwords (`decode_b64`)
+
+To avoid storing plaintext passwords:
+
+```bash
+python -c "import base64; print(base64.b64encode(b'mypassword').decode())"
+```
+
+Set `password` to the encoded value and add `decode_b64=True`:
+
+```ini
+password=bXlwYXNzd29yZA==
+decode_b64=True
+```
+
+!!! warning "Not encryption"
+    Base64 is encoding, not encryption — anyone with the file can decode it. Use OS-level file permissions or a secrets manager for real protection.
 
 ## Common parameters
 
-_This page is a placeholder — content coming soon._
+| Parameter | Default | Description |
+|---|---|---|
+| `session_context` | `optimuspy` | Label that appears in `}StatsByActiveSession` |
+| `async_requests_mode` | `false` | Recommended `true` for benchmarking large cubes |
+| `connection_pool_size` | `10` | Connection pool size for parallel requests |
+
+## Editing connections from the UI
+
+You don't have to hand-edit `config.ini`. The **Settings → TM1 Instances** page provides full CRUD: add/remove fields, create/delete instances, and **Test Connection** before saving.
+
+[Settings Page →](../ui/settings-page.md)

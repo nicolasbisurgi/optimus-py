@@ -1,21 +1,53 @@
 # Settings Page
 
-Manage TM1 instances (CRUD), test connections, edit config.ini fields, and clear local caches.
+Manage TM1 connections, browser theme, local cache, and saved cube configs — all without touching `config.ini` by hand.
 
-_This page is a placeholder — content coming soon._
+> 📸 **Screenshot needed:** Settings page with the TM1 Instances card expanded and a connection's fields visible.
 
-## Appearance (theme)
+## Appearance
 
-_This page is a placeholder — content coming soon._
+Theme switcher: **System** (follows OS preference), **Light**, or **Dark**. Persists in `localStorage`.
 
-## TM1 Instances (CRUD + Test Connection)
+## TM1 Instances
 
-_This page is a placeholder — content coming soon._
+A tab per instance defined in `config.ini`. Each tab shows the instance's fields as editable rows.
 
-## Cache management
+### Editing fields
 
-_This page is a placeholder — content coming soon._
+- Click any value to edit it.
+- Click the **×** next to a field to delete that key from the section.
+- Click **Add Field** to add a new key/value pair (freeform — type any TM1py-supported parameter name).
+- Use **Update Password (write-only)** to change the password without exposing the current value.
 
-## Saved cube configs
+Click **Save** to persist changes to `config.ini`.
 
-_This page is a placeholder — content coming soon._
+> 📸 **Screenshot needed:** A field row with the delete (×) button and the Add Field button below.
+
+### Test Connection
+
+Validates the current field values against the live TM1 server without saving. Returns server name and cube count on success, or a clear error toast on failure.
+
+> 📸 **Screenshot needed:** A success toast showing "Connected to {server} ({cube_count} cubes)".
+
+### New Instance
+
+Click **+ New Instance** above the tabs. A modal asks for the instance name (no `]` characters, no leading/trailing whitespace). The new section appears as an empty tab where you add fields.
+
+### Delete Instance
+
+The red **Delete Instance** button at the bottom of each tab removes the section from `config.ini` after a confirmation modal. Permanent.
+
+## Cache
+
+Two caches are stored in your browser's `localStorage`:
+
+| Cache | Key prefix | TTL |
+|---|---|---|
+| Scan results | `op-scan-` | 24 hours |
+| Cube intelligence (dimension metadata) | `op-intel-` | 7 days |
+
+Click **Clear Cache** to wipe both, plus the in-memory state. Use this after server-side changes (deleted string elements, renamed dimensions, fresh data load) to force a clean fetch.
+
+## Saved Cube Configs
+
+Lists every JSON config saved in `configs/` from the Optimize workflow. Each row shows cube name, instance, mode, and a **Delete** button. Useful for cleaning up experiments.
