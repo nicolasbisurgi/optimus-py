@@ -44,7 +44,14 @@ export default function AnimatedScatter({ width = '100%', height = 320 }) {
   const py = (y) => pad.top + (y / 100) * (H - pad.top - pad.bottom)
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={width} height={height} className="block">
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width={width}
+      height={height}
+      className="block"
+      role="img"
+      aria-label={`Scatter plot of ${POINTS.length} dimension orders benchmarked by OptimusPy, with the optimal order highlighted in cyan.`}
+    >
       <defs>
         <radialGradient id="winner-glow">
           <stop offset="0" stopColor="#22d3ee" stopOpacity="0.6"/>
