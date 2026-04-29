@@ -13,3 +13,11 @@ config/config.ini
 configs/
 test.py
 CLAUDE.md
+
+# mkdocs build output
+mkdocs_site/
+
+# Internal planning (not deployed to public docs)
+docs/superpowers/
+docs/plans/
+docs/*.docx
