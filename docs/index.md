@@ -1,6 +1,10 @@
-# OptimusPy Documentation
+<div class="optimus-banner" markdown>
+## OptimusPy Documentation
 
-OptimusPy finds the ideal dimension order for IBM TM1 / Planning Analytics cubes by benchmarking permutations against query speed, RAM usage, and optional TI process execution time. It connects to TM1 via the REST API using TM1py and ships with a CLI and a local web UI.
+Benchmarks IBM TM1 / Planning Analytics dimension orders against query speed, RAM, and TI execution. Six modes, a local web UI, and an interactive HTML dashboard.
+
+[← Back to the landing page](https://cubewise-code.github.io/optimus-py/){ .back-link }
+</div>
 
 <div align="center" markdown>
 [:material-web: Website](https://cubewise-code.github.io/optimus-py/){ .md-button }

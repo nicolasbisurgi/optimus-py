@@ -1,4 +1,10 @@
-# OptimusPy v2.0 — What's New
+<div class="optimus-banner" markdown>
+## What's new in OptimusPy v2
+
+A major rewrite. Web UI, JSON-driven CLI, multi-view benchmarking, six optimization modes, an interactive HTML dashboard, and checkpoint/resume.
+
+[← Back to the landing page](https://cubewise-code.github.io/optimus-py/){ .back-link }
+</div>
 
 OptimusPy is a CLI tool that finds the ideal dimension order for IBM TM1 / Planning Analytics cubes. It benchmarks different dimension permutations against query speed, RAM usage, and TI process execution time to determine which order performs best.
 
