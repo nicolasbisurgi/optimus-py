@@ -5,6 +5,7 @@ import WebUIShowcase from './components/WebUIShowcase'
 import AlgorithmShowcase from './components/AlgorithmShowcase'
 import ModesCarousel from './components/ModesCarousel'
 import HowItWorks from './components/HowItWorks'
+import GetStarted from './components/GetStarted'
 import Footer from './components/Footer'
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <AlgorithmShowcase />
         <ModesCarousel />
         <HowItWorks />
+        <GetStarted />
       </main>
       <Footer />
     </div>
