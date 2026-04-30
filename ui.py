@@ -18,7 +18,7 @@ for _entry in ('', '.', _script_dir):
         sys.path.remove(_entry)
         _removed.append(_entry)
 
-from optimuspy.ui import main
+from optimuspy.ui import main  # noqa: E402 — must run after sys.path manipulation above
 
 for _entry in _removed:
     sys.path.append(_entry)

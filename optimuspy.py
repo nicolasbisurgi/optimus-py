@@ -20,7 +20,7 @@ for _entry in ('', '.', _script_dir):
         sys.path.remove(_entry)
         _removed.append(_entry)
 
-from optimuspy.cli import main
+from optimuspy.cli import main  # noqa: E402 — must run after sys.path manipulation above
 
 # Restore path entries
 for _entry in _removed:

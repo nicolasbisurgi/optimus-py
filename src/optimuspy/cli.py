@@ -22,7 +22,7 @@ def print_banner():
     G = "\033[38;2;255;184;28m"   # Gold
     W = "\033[97m"                # White
     D = "\033[90m"                # Dim gray
-    I = "\033[3m"                 # Italic
+    I = "\033[3m"                 # Italic  # noqa: E741 — single-letter ANSI style code matches sibling vars (S/G/W/D/R)
     R = "\033[0m"                 # Reset
 
     print(f"""
