@@ -21,7 +21,7 @@ export default function AlgorithmShowcase() {
             Watch it find the winner.
           </h2>
           <p className={`text-text-secondary max-w-3xl mx-auto animate-on-scroll stagger-3 ${isVisible ? 'visible' : ''}`}>
-            Every dot is a benchmarked dimension order. Lower-right is better — less RAM, faster queries. The greedy search explores the space and converges on the optimum.
+            Every dot is a benchmarked dimension order, plotted by RAM saved and query speedup versus the baseline. Top-right is the sweet spot — biggest gains on both axes. The greedy search explores the space and converges on the winner.
           </p>
         </div>
 
