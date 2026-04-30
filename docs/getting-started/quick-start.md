@@ -1,6 +1,10 @@
-# Quick Start
+<div class="optimus-banner" markdown>
+## Quick Start
 
 Get from a fresh install to your first optimized cube in under 10 minutes.
+
+[← Back to the landing page](https://cubewise-code.github.io/optimus-py/){ .back-link }
+</div>
 
 ## Step 1 — Configure config.ini
 
@@ -26,7 +30,7 @@ python -m optimuspy.ui
 
 Your browser opens at `http://127.0.0.1:8765`.
 
-> 📸 **Screenshot needed:** The Optimize page on first launch with the instance switcher highlighted.
+![OptimusPy Optimize page on first launch](../assets/images/optimuspy/ui/optimize-page.png)
 
 ## Step 3 — Connect & scan
 
@@ -34,7 +38,7 @@ In the sidebar, click the **instance switcher** at the top and pick the instance
 
 The Optimize page lists candidate cubes ranked by RAM consumption. By default, only **non-optimized** cubes appear (cubes whose visible order already differs from storage order are hidden — toggle **Include Optimized** to see them too).
 
-> 📸 **Screenshot needed:** The cube list after a successful scan, with RAM column visible.
+![Cube list ranked by RAM](../assets/images/optimuspy/ui/optimize-page.png)
 
 ## Step 4 — Optimize a cube
 
@@ -46,13 +50,13 @@ Click any cube in the list. The workspace opens with three tabs:
 
 For your first run, leave **Mode = Greedy** and **Executions = 5**. Click **Run Optimization**.
 
-> 📸 **Screenshot needed:** The Configure tab with default settings ready to launch.
+> **Note:** Screenshot to be captured in a follow-up — the Configure tab requires real cube data. Today the mock exporter only produces the Optimize landing page.
 
 ## Step 5 — Review results
 
 The job streams live progress in the sidebar Activity Monitor. When it finishes, the **Results** page lists the generated files. Open the HTML report — an interactive scatter plot shows every tested order, with the best one highlighted on the podium.
 
-> 📸 **Screenshot needed:** The HTML result report with podium and scatter plot.
+> **Note:** Screenshot to be captured in a follow-up — the HTML result report requires a real optimization run. Today the mock exporter only produces the Optimize landing page.
 
 ## What's next
 

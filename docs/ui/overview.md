@@ -1,6 +1,12 @@
-# UI Overview
+<div class="optimus-banner" markdown>
+## UI Overview
 
-OptimusPy ships with a local web UI that wraps the entire scan → configure → optimize → apply workflow. It's a single-page app served by a lightweight Python HTTP server — no extra dependencies, no cloud.
+OptimusPy ships with a local web UI that wraps the entire scan → configure → optimize → apply workflow.
+
+[← Back to the landing page](https://cubewise-code.github.io/optimus-py/){ .back-link }
+</div>
+
+It's a single-page app served by a lightweight Python HTTP server — no extra dependencies, no cloud.
 
 ## Launching
 
@@ -32,7 +38,7 @@ optimuspy.exe ui
 
 ## Sidebar navigation
 
-> 📸 **Screenshot needed:** The full sidebar with all five pages and the instance switcher visible.
+![OptimusPy sidebar with all five pages](../assets/images/optimuspy/ui/sidebar-overview.png)
 
 | Item | Purpose |
 |---|---|
