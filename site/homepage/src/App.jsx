@@ -1,6 +1,7 @@
 import Navigation from './components/Navigation'
 import Hero from './components/Hero'
 import WhatIsOptimusPy from './components/WhatIsOptimusPy'
+import WebUIShowcase from './components/WebUIShowcase'
 import Footer from './components/Footer'
 
 export default function App() {
@@ -10,6 +11,7 @@ export default function App() {
       <main>
         <Hero />
         <WhatIsOptimusPy />
+        <WebUIShowcase />
       </main>
       <Footer />
     </div>
