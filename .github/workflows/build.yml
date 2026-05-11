@@ -44,22 +44,27 @@ jobs:
           files: dist/optimuspy.exe
 
   build-linux:
-    name: Build on Linux (manylinux_2_28, x86_64)
+    name: Build on Linux (RHEL 8 compatible, x86_64)
     needs: build-windows
     runs-on: ubuntu-latest
     container:
-      image: quay.io/pypa/manylinux_2_28_x86_64
+      image: almalinux:8
     steps:
+      - name: Install system dependencies
+        run: |
+          dnf -y install python3.11 python3.11-pip python3.11-devel \
+                         binutils file git tar gzip
+
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
-          PY=/opt/python/cp311-cp311/bin
-          echo "$PY" >> $GITHUB_PATH
-          $PY/python -m pip install --upgrade pip
-          $PY/pip install pyinstaller
-          $PY/pip install -r requirements.txt
+          python3.11 -m venv /tmp/venv
+          /tmp/venv/bin/pip install --upgrade pip
+          /tmp/venv/bin/pip install pyinstaller
+          /tmp/venv/bin/pip install -r requirements.txt
+          echo "/tmp/venv/bin" >> $GITHUB_PATH
 
       - name: Build executable
         run: pyinstaller optimuspy.spec
