@@ -8,10 +8,8 @@ Usage:
 """
 
 import argparse
-import configparser
 import json
 import logging
-import os
 import queue
 import re
 import sys
@@ -19,16 +17,15 @@ import threading
 import time
 import uuid
 import webbrowser
-from contextlib import suppress
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, unquote
 
 from TM1py import TM1Service
 
 from optimuspy.core import (
-    get_tm1_config, load_cube_config, validate_cube_config,
-    main as run_optimuspy, _scan_to_data, _scan_to_data_light, APP_NAME, RESULT_PATH,
+    get_tm1_config, validate_cube_config,
+    main as run_optimuspy, _scan_to_data_light, APP_NAME, RESULT_PATH,
     set_current_directory, _collect_dimension_metadata, _compute_suggested_order
 )
 from optimuspy.executors import OptimizationCancelled
@@ -1066,11 +1063,11 @@ def main():
     server = HTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
     url = f"http://127.0.0.1:{args.port}"
 
-    print(f"\n  OptimusPy Workflow UI")
+    print("\n  OptimusPy Workflow UI")
     print(f"  {'─' * 40}")
     print(f"  URL:        {url}")
     print(f"  Config:     {_config_ini_path}")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
 
     # Auto-open browser
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
