@@ -565,7 +565,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[instance_name][key] = str(value)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -585,7 +585,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[name][key] = str(value)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -597,7 +597,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if instance_name not in config:
                 return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
             config.remove_section(instance_name)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -611,7 +611,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if field_key not in config[instance_name]:
                 return self._send_json(404, {"error": f"Field '{field_key}' not found"})
             config.remove_option(instance_name, field_key)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:

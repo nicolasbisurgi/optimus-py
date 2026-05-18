@@ -51,7 +51,7 @@ def configure_logging():
 
 def get_tm1_config(config_ini_path: str):
     config = configparser.ConfigParser()
-    config.read(config_ini_path)
+    config.read(config_ini_path, encoding="utf-8")
     return config
 
 
