@@ -8,10 +8,8 @@ Usage:
 """
 
 import argparse
-import configparser
 import json
 import logging
-import os
 import queue
 import re
 import sys
@@ -19,16 +17,15 @@ import threading
 import time
 import uuid
 import webbrowser
-from contextlib import suppress
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, unquote
 
 from TM1py import TM1Service
 
 from optimuspy.core import (
-    get_tm1_config, load_cube_config, validate_cube_config,
-    main as run_optimuspy, _scan_to_data, _scan_to_data_light, APP_NAME, RESULT_PATH,
+    get_tm1_config, validate_cube_config,
+    main as run_optimuspy, _scan_to_data_light, APP_NAME, RESULT_PATH,
     set_current_directory, _collect_dimension_metadata, _compute_suggested_order
 )
 from optimuspy.executors import OptimizationCancelled
@@ -565,7 +562,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[instance_name][key] = str(value)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -585,7 +582,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[name][key] = str(value)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -597,7 +594,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if instance_name not in config:
                 return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
             config.remove_section(instance_name)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -611,7 +608,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if field_key not in config[instance_name]:
                 return self._send_json(404, {"error": f"Field '{field_key}' not found"})
             config.remove_option(instance_name, field_key)
-            with open(_config_ini_path, "w") as f:
+            with open(_config_ini_path, "w", encoding="utf-8") as f:
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
@@ -1066,11 +1063,11 @@ def main():
     server = HTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
     url = f"http://127.0.0.1:{args.port}"
 
-    print(f"\n  OptimusPy Workflow UI")
+    print("\n  OptimusPy Workflow UI")
     print(f"  {'─' * 40}")
     print(f"  URL:        {url}")
     print(f"  Config:     {_config_ini_path}")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
 
     # Auto-open browser
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()

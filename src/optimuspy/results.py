@@ -220,7 +220,7 @@ class OptimusResult:
     def to_csv(self, file_name):
         lines = self.to_lines()
         os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
-        with open(str(file_name), "w") as file:
+        with open(str(file_name), "w", encoding="utf-8") as file:
             file.writelines(lines)
 
     def to_xlsx(self, file_name):
@@ -920,7 +920,7 @@ renderTable();
 </html>"""
 
         os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
-        with open(str(file_name), "w") as f:
+        with open(str(file_name), "w", encoding="utf-8") as f:
             f.write(html)
 
     @property
