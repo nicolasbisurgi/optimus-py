@@ -2020,6 +2020,11 @@ const OptimusPy = (function () {
       });
       searchInput.addEventListener("input", () => {
         this._searchQuery = searchInput.value;
+        const body = $("#cubePanelBody");
+        if (body && state.scanData) {
+          body.innerHTML = "";
+          this._renderCubeList(body);
+        }
       });
       filterWrap.appendChild(searchInput);
       // RAM slider
@@ -2099,15 +2104,27 @@ const OptimusPy = (function () {
     },
 
     _renderCubeList(container) {
-      const cubes = state.scanData?.candidates || [];
-      if (cubes.length === 0) {
+      const allCubes = state.scanData?.candidates || [];
+      if (allCubes.length === 0) {
         container.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px;text-align:center" }, "No cubes found"));
         return;
       }
-      const maxRam = Math.max(...cubes.map(c => c.ram_gb || 0), 0.01);
+      const query = (this._searchQuery || "").trim().toLowerCase();
+      const cubes = query
+        ? allCubes.filter(c => (c.cube_name || "").toLowerCase().includes(query))
+        : allCubes;
+      const maxRam = Math.max(...allCubes.map(c => c.ram_gb || 0), 0.01);
       // Summary
-      container.appendChild(el("div", { className: "text-xs text-tertiary", style: "padding:0 4px 8px" },
-        `${cubes.length} cube${cubes.length !== 1 ? "s" : ""}`));
+      const summaryText = query
+        ? `${cubes.length} of ${allCubes.length} cube${allCubes.length !== 1 ? "s" : ""}`
+        : `${allCubes.length} cube${allCubes.length !== 1 ? "s" : ""}`;
+      container.appendChild(el("div", { className: "text-xs text-tertiary", style: "padding:0 4px 8px" }, summaryText));
+
+      if (query && cubes.length === 0) {
+        container.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px;text-align:center" },
+          `No cubes match "${this._searchQuery}"`));
+        return;
+      }
 
       cubes.forEach(c => {
         const isActive = c.cube_name === this._selectedCube;
