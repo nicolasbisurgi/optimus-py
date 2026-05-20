@@ -126,7 +126,7 @@ class CheckpointManager:
             tmp_path = self.checkpoint_path.with_suffix(".tmp")
             with open(tmp_path, "w") as f:
                 json.dump(data, f, indent=2)
-            tmp_path.rename(self.checkpoint_path)
+            tmp_path.replace(self.checkpoint_path)
 
     def remove(self):
         if self.tm1:

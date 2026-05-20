@@ -138,13 +138,19 @@ class JobManager:
                 tm1_holder=job["tm1_holder"],
             )
 
-            # Find result files
+            # Find result files (search both top-level legacy files and instance subdirs)
             cube_name = cube_config.get("cube", "")
+            instance_name = cube_config.get("instance", "")
             result_files = []
             if RESULT_PATH.exists():
-                for f in sorted(RESULT_PATH.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if f.name.startswith(cube_name) and not f.name.startswith("checkpoint"):
-                        result_files.append(f.name)
+                candidates = [f for f in RESULT_PATH.rglob("*") if f.is_file()]
+                for f in sorted(candidates, key=lambda x: x.stat().st_mtime, reverse=True):
+                    if f.name.startswith("checkpoint"):
+                        continue
+                    # Match new format (<instance>_<cube>_<ts>) or legacy (<cube>_<ts>)
+                    if f.name.startswith(f"{instance_name}_{cube_name}_") or f.name.startswith(f"{cube_name}_"):
+                        rel = f.relative_to(RESULT_PATH).as_posix()
+                        result_files.append(rel)
                         if len(result_files) >= 4:
                             break
 
@@ -987,16 +993,24 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         results = []
         ts_pattern = re.compile(r'_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$')
         if RESULT_PATH.exists():
-            for f in sorted(RESULT_PATH.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            files = [f for f in RESULT_PATH.rglob("*") if f.is_file()]
+            for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
                 if f.name.startswith("checkpoint"):
                     continue
-                # Extract cube name: everything before the _YYYY-MM-DD_HH-MM-SS timestamp
+                # Instance is the immediate parent dir (or "" for legacy top-level files)
+                parent = f.parent
+                instance = parent.name if parent != RESULT_PATH else ""
+                # Extract cube name: strip instance prefix (if present) and trailing timestamp
                 stem = f.stem
+                if instance and stem.startswith(f"{instance}_"):
+                    stem = stem[len(instance) + 1:]
                 m = ts_pattern.search(stem)
                 cube_name = stem[:m.start()] if m else stem
+                rel = f.relative_to(RESULT_PATH).as_posix()
                 results.append({
-                    "filename": f.name,
+                    "filename": rel,
                     "cube": cube_name,
+                    "instance": instance,
                     "size": f.stat().st_size,
                     "modified": f.stat().st_mtime,
                     "type": f.suffix[1:],
@@ -1007,9 +1021,24 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"jobs": job_manager.list_jobs()})
 
     def _handle_serve_result(self, filename: str):
-        # Sanitize: only serve from results/, decode URL-encoded names (e.g. spaces)
-        safe = Path(RESULT_PATH) / Path(unquote(filename)).name
-        if not safe.exists():
+        # Sanitize: only serve from results/, decode URL-encoded names (e.g. spaces).
+        # Support one level of subdirectory (results/<instance>/<file>) while blocking
+        # path traversal.
+        decoded = unquote(filename)
+        rel = Path(decoded)
+        if rel.is_absolute() or any(part in ("..", "") for part in rel.parts):
+            return self._send_json(400, {"error": "Invalid path"})
+        if len(rel.parts) > 2:
+            return self._send_json(400, {"error": "Invalid path"})
+
+        root = Path(RESULT_PATH).resolve()
+        safe = (root / rel).resolve()
+        try:
+            safe.relative_to(root)
+        except ValueError:
+            return self._send_json(400, {"error": "Invalid path"})
+
+        if not safe.exists() or not safe.is_file():
             return self._send_json(404, {"error": "File not found"})
 
         content_types = {

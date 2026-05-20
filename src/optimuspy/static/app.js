@@ -1972,6 +1972,7 @@ const OptimusPy = (function () {
     _panelHidden: false,
     _ramThreshold: 60,
     _includeOptimized: false,
+    _searchQuery: "",
 
     mount(params, query) {
       if (!state.connected) {
@@ -2009,6 +2010,23 @@ const OptimusPy = (function () {
 
       // Header: filter controls
       const filterWrap = el("div");
+      // Search input (filters the already-scanned cube list client-side)
+      const searchInput = el("input", {
+        type: "search",
+        placeholder: "Search cubes…",
+        value: this._searchQuery,
+        className: "form-input",
+        style: "width:100%;margin-bottom:8px;font-size:12px;padding:4px 8px",
+      });
+      searchInput.addEventListener("input", () => {
+        this._searchQuery = searchInput.value;
+        const body = $("#cubePanelBody");
+        if (body && state.scanData) {
+          body.innerHTML = "";
+          this._renderCubeList(body);
+        }
+      });
+      filterWrap.appendChild(searchInput);
       // RAM slider
       const ramRow = el("div", { className: "flex items-center justify-between mb-2" });
       ramRow.appendChild(el("span", { className: "cube-filter-label" }, "RAM Threshold"));
@@ -2086,15 +2104,28 @@ const OptimusPy = (function () {
     },
 
     _renderCubeList(container) {
-      const cubes = state.scanData?.candidates || [];
-      if (cubes.length === 0) {
+      const allCubes = state.scanData?.candidates || [];
+      if (allCubes.length === 0) {
         container.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px;text-align:center" }, "No cubes found"));
         return;
       }
-      const maxRam = Math.max(...cubes.map(c => c.ram_gb || 0), 0.01);
+      const query = (this._searchQuery || "").trim().toLowerCase();
+      const cubes = query
+        ? allCubes.filter(c => (c.cube_name || "").toLowerCase().includes(query))
+        : allCubes;
+      // Normalize bars against the full population so filtering doesn't rescale them.
+      const maxRam = Math.max(...allCubes.map(c => c.ram_gb || 0), 0.01);
       // Summary
-      container.appendChild(el("div", { className: "text-xs text-tertiary", style: "padding:0 4px 8px" },
-        `${cubes.length} cube${cubes.length !== 1 ? "s" : ""}`));
+      const summaryText = query
+        ? `${cubes.length} of ${allCubes.length} cube${allCubes.length !== 1 ? "s" : ""}`
+        : `${allCubes.length} cube${allCubes.length !== 1 ? "s" : ""}`;
+      container.appendChild(el("div", { className: "text-xs text-tertiary", style: "padding:0 4px 8px" }, summaryText));
+
+      if (query && cubes.length === 0) {
+        container.appendChild(el("div", { className: "text-sm text-tertiary", style: "padding:12px;text-align:center" },
+          `No cubes match "${this._searchQuery}"`));
+        return;
+      }
 
       cubes.forEach(c => {
         const isActive = c.cube_name === this._selectedCube;
@@ -3407,7 +3438,8 @@ const OptimusPy = (function () {
 
         const tbl = createTable({
           columns: [
-            { key: "filename", label: "File", render: r => el("span", { className: "font-medium" }, r.filename) },
+            { key: "instance", label: "Instance", render: r => el("span", { className: "text-secondary text-sm" }, r.instance || "—") },
+            { key: "filename", label: "File", render: r => el("span", { className: "font-medium" }, (r.filename || "").split("/").pop()) },
             { key: "type", label: "Type", render: r => el("span", { className: "badge badge-neutral" }, r.type.toUpperCase()) },
             { key: "size", label: "Size", align: "right", value: r => formatBytes(r.size) },
             { key: "modified", label: "Date", value: r => formatDate(r.modified) },
@@ -3502,8 +3534,9 @@ const OptimusPy = (function () {
 
         const tbl = createTable({
           columns: [
+            { key: "instance", label: "Instance", render: r => el("span", { className: "text-secondary text-sm" }, r.instance || "—") },
             { key: "cube", label: "Cube", render: r => el("a", { href: `#/cube/${encodeURIComponent(r.cube)}?tab=results`, className: "font-medium" }, r.cube) },
-            { key: "filename", label: "File" },
+            { key: "filename", label: "File", value: r => (r.filename || "").split("/").pop() },
             { key: "type", label: "Type", render: r => el("span", { className: "badge badge-neutral" }, r.type.toUpperCase()) },
             { key: "size", label: "Size", align: "right", sortValue: r => r.size, value: r => formatBytes(r.size) },
             { key: "modified", label: "Date", sortValue: r => r.modified, value: r => formatDate(r.modified) },
