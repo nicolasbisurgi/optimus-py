@@ -1972,6 +1972,7 @@ const OptimusPy = (function () {
     _panelHidden: false,
     _ramThreshold: 60,
     _includeOptimized: false,
+    _searchQuery: "",
 
     mount(params, query) {
       if (!state.connected) {
@@ -2009,6 +2010,18 @@ const OptimusPy = (function () {
 
       // Header: filter controls
       const filterWrap = el("div");
+      // Search input (filters the already-scanned cube list client-side)
+      const searchInput = el("input", {
+        type: "search",
+        placeholder: "Search cubes…",
+        value: this._searchQuery,
+        className: "form-input",
+        style: "width:100%;margin-bottom:8px;font-size:12px;padding:4px 8px",
+      });
+      searchInput.addEventListener("input", () => {
+        this._searchQuery = searchInput.value;
+      });
+      filterWrap.appendChild(searchInput);
       // RAM slider
       const ramRow = el("div", { className: "flex items-center justify-between mb-2" });
       ramRow.appendChild(el("span", { className: "cube-filter-label" }, "RAM Threshold"));
