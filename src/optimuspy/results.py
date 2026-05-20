@@ -190,8 +190,10 @@ class PermutationResult:
 class OptimusResult:
     TEXT_FONT_SIZE = 5
 
-    def __init__(self, cube_name: str, permutation_results: List[PermutationResult]):
+    def __init__(self, cube_name: str, permutation_results: List[PermutationResult],
+                 instance_name: str = None):
         self.cube_name = cube_name
+        self.instance_name = instance_name
         self.permutation_results = permutation_results
         if len(permutation_results) == 0:
             raise RuntimeError("Number of permutation results can not be 0")
@@ -217,8 +219,18 @@ class OptimusResult:
             [r.to_csv_row(self.original_order_result) for r in self.permutation_results])
         return list(lines)
 
+    def _metadata_lines(self) -> List[str]:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        return [
+            "# OptimusPy Report\n",
+            f"# Instance: {self.instance_name or 'N/A'}\n",
+            f"# Cube: {self.cube_name}\n",
+            f"# Generated: {timestamp}\n",
+            "\n",
+        ]
+
     def to_csv(self, file_name):
-        lines = self.to_lines()
+        lines = self._metadata_lines() + self.to_lines()
         os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
         with open(str(file_name), "w", encoding="utf-8") as file:
             file.writelines(lines)
@@ -227,23 +239,38 @@ class OptimusResult:
         try:
             import xlsxwriter
 
-            workbook = xlsxwriter.Workbook(file_name)
+            os.makedirs(os.path.dirname(str(file_name)), exist_ok=True)
+            workbook = xlsxwriter.Workbook(str(file_name))
             worksheet = workbook.add_worksheet()
 
             line_data = []
 
             header_format = workbook.add_format({'bold': True})
+            meta_format = workbook.add_format({'italic': True, 'font_color': '#475569'})
             original_format = workbook.add_format({'bg_color': '#DCE6F1'})
             result_format = workbook.add_format({'bg_color': '#B3FBC1'})
             iteration_format = workbook.add_format({'bg_color': '#FFFFFF'})
 
-            for row, line in enumerate(self.to_lines()):
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            meta_rows = [
+                ("OptimusPy Report", ""),
+                ("Instance", self.instance_name or "N/A"),
+                ("Cube", self.cube_name),
+                ("Generated", timestamp),
+            ]
+            for r, (label, value) in enumerate(meta_rows):
+                worksheet.write(r, 0, label, meta_format)
+                worksheet.write(r, 1, value, meta_format)
+
+            header_row = len(meta_rows) + 1  # blank row separator
+            for offset, line in enumerate(self.to_lines()):
+                row = header_row + offset
                 line_data = line.split(SEPARATOR)
-                if "Original" in line_data[1]:
+                if len(line_data) > 1 and "Original" in line_data[1]:
                     row_format = original_format
-                elif "Result" in line_data[1]:
+                elif len(line_data) > 1 and "Result" in line_data[1]:
                     row_format = result_format
-                elif row == 0:
+                elif offset == 0:
                     row_format = header_format
                 else:
                     row_format = iteration_format
@@ -252,7 +279,7 @@ class OptimusResult:
                     worksheet.write(row, col, item, row_format)
 
             if line_data:
-                worksheet.autofilter(0, 0, 0, len(line_data) - 1)
+                worksheet.autofilter(header_row, 0, header_row, len(line_data) - 1)
 
             workbook.close()
 
@@ -283,6 +310,7 @@ class OptimusResult:
         best = self.best_result
         logo_b64 = self._load_logo_base64()
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        report_subject = f"{self.instance_name} / {self.cube_name}" if self.instance_name else self.cube_name
 
         # Summary metrics
         original_ram_gb = original.ram_usage / (1024 ** 3)
@@ -436,7 +464,7 @@ class OptimusResult:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OptimusPy Report — {self.cube_name}</title>
+<title>OptimusPy Report — {report_subject}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -585,7 +613,7 @@ class OptimusResult:
     <div class="header">
         <div class="header-left">
             {logo_html}
-            <h1>Optimization Report — {self.cube_name}</h1>
+            <h1>Optimization Report — {report_subject}</h1>
         </div>
         <div class="header-meta">
             Generated {timestamp}

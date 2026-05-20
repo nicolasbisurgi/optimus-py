@@ -3407,7 +3407,8 @@ const OptimusPy = (function () {
 
         const tbl = createTable({
           columns: [
-            { key: "filename", label: "File", render: r => el("span", { className: "font-medium" }, r.filename) },
+            { key: "instance", label: "Instance", render: r => el("span", { className: "text-secondary text-sm" }, r.instance || "—") },
+            { key: "filename", label: "File", render: r => el("span", { className: "font-medium" }, (r.filename || "").split("/").pop()) },
             { key: "type", label: "Type", render: r => el("span", { className: "badge badge-neutral" }, r.type.toUpperCase()) },
             { key: "size", label: "Size", align: "right", value: r => formatBytes(r.size) },
             { key: "modified", label: "Date", value: r => formatDate(r.modified) },
@@ -3502,8 +3503,9 @@ const OptimusPy = (function () {
 
         const tbl = createTable({
           columns: [
+            { key: "instance", label: "Instance", render: r => el("span", { className: "text-secondary text-sm" }, r.instance || "—") },
             { key: "cube", label: "Cube", render: r => el("a", { href: `#/cube/${encodeURIComponent(r.cube)}?tab=results`, className: "font-medium" }, r.cube) },
-            { key: "filename", label: "File" },
+            { key: "filename", label: "File", value: r => (r.filename || "").split("/").pop() },
             { key: "type", label: "Type", render: r => el("span", { className: "badge badge-neutral" }, r.type.toUpperCase()) },
             { key: "size", label: "Size", align: "right", sortValue: r => r.size, value: r => formatBytes(r.size) },
             { key: "modified", label: "Date", sortValue: r => r.modified, value: r => formatDate(r.modified) },

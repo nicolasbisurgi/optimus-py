@@ -23,7 +23,7 @@ APP_NAME = "optimuspy"
 TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 LOGFILE = APP_NAME + ".log"
 RESULT_PATH = Path("results/")
-RESULT_FILENAME = "{}_{}"  # cube_name, timestamp
+RESULT_FILENAME = "{}_{}_{}"  # instance, cube_name, timestamp
 
 
 def set_current_directory():
@@ -430,7 +430,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
         unique_results = _deduplicate_results(
             [original_order_result], resumed_results, permutation_results)
 
-        optimus_result = OptimusResult(cube_name, unique_results)
+        optimus_result = OptimusResult(cube_name, unique_results, instance_name=instance_name)
         best_permutation = optimus_result.best_result
         logging.info(f"Completed analysis for cube '{cube_name}'")
 
@@ -476,15 +476,18 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
 
         if unique_for_output:
             if optimus_result is None:
-                optimus_result = OptimusResult(cube_name, unique_for_output)
-            file_base = RESULT_FILENAME.format(cube_name, TIME_STAMP)
+                optimus_result = OptimusResult(cube_name, unique_for_output, instance_name=instance_name)
+            else:
+                optimus_result.instance_name = instance_name
+            file_base = RESULT_FILENAME.format(instance_name, cube_name, TIME_STAMP)
+            instance_dir = RESULT_PATH / instance_name
 
-            optimus_result.to_html(RESULT_PATH / f"{file_base}.html", total_duration=context.elapsed)
+            optimus_result.to_html(instance_dir / f"{file_base}.html", total_duration=context.elapsed)
 
             if output.upper() == "XLSX":
-                optimus_result.to_xlsx(RESULT_PATH / f"{file_base}.xlsx")
+                optimus_result.to_xlsx(instance_dir / f"{file_base}.xlsx")
             else:
-                optimus_result.to_csv(RESULT_PATH / f"{file_base}.csv")
+                optimus_result.to_csv(instance_dir / f"{file_base}.csv")
 
     return True
 
