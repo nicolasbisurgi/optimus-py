@@ -2113,6 +2113,7 @@ const OptimusPy = (function () {
       const cubes = query
         ? allCubes.filter(c => (c.cube_name || "").toLowerCase().includes(query))
         : allCubes;
+      // Normalize bars against the full population so filtering doesn't rescale them.
       const maxRam = Math.max(...allCubes.map(c => c.ram_gb || 0), 0.01);
       // Summary
       const summaryText = query
