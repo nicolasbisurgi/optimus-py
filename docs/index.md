@@ -3,6 +3,8 @@
 
 Benchmarks IBM TM1 / Planning Analytics dimension orders against query speed, RAM, and TI execution. Six modes, a local web UI, and an interactive HTML dashboard.
 
+Supported versions: TM1 v11 and v12 (PAoC/PAaaS).
+
 [← Back to the landing page](https://cubewise-code.github.io/optimus-py/){ .back-link }
 </div>
 

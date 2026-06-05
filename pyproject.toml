@@ -27,7 +27,7 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "TM1py>=1.5.0",
+    "TM1py>=2.3.0",
     "configparser>=3.5.3",
     "mdxpy>=0.2",
     "xlsxwriter",

@@ -7,6 +7,7 @@ from typing import List, Dict
 from TM1py import TM1Service, Process
 
 from optimuspy.execution_mode import ExecutionMode
+from optimuspy.metrics import read_cube_memory_bytes
 from optimuspy.results import ExecutionContext, PermutationResult
 
 
@@ -30,7 +31,8 @@ class OptipyzerExecutor:
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  displayed_dimension_order: List[str],
                  executions: int, measure_dimension_only_numeric: bool, context: ExecutionContext,
-                 checkpoint_manager=None, process_parameters: dict = None, cancel_event=None):
+                 checkpoint_manager=None, process_parameters: dict = None, cancel_event=None,
+                 is_v12: bool = False):
         self.tm1 = tm1
         self.cube_name = cube_name
         self.view_names = view_names
@@ -38,6 +40,7 @@ class OptipyzerExecutor:
         self.dimensions = displayed_dimension_order
         self.executions = executions
         self.measure_dimension_only_numeric = measure_dimension_only_numeric
+        self.is_v12 = is_v12
         self.mode = None
         self.include_process = bool(process_names)
         self.cube_dim_number = len(self.dimensions)
@@ -129,24 +132,9 @@ class OptipyzerExecutor:
         return permutation_result
 
     def _retrieve_ram_usage(self):
-        number_of_iterations = 4
-        for i in range(number_of_iterations):
-            mdx = """
-            SELECT
-            {{ [}}PerfCubes].[{}] }} ON ROWS,
-            {{ [}}StatsStatsByCube].[Total Memory Used] }} ON COLUMNS
-            FROM [}}StatsByCube]
-            WHERE ([}}TimeIntervals].[LATEST])
-            """.format(self.cube_name)
-            value = list(self.tm1.cells.execute_mdx_values(mdx=mdx))[0]
-            if value:
-                return value
-
-            logging.info("Failed to retrieve RAM consumption. Waiting 15s before retry")
-            if i < number_of_iterations - 1:
-                time.sleep(15)
-
-        raise RuntimeError("Performance Monitor must be activated")
+        # RAM baseline in bytes via MetricService (cube_memory_used), version-agnostic.
+        # v11 keeps the read-retry loop; v12 fails fast (see read_cube_memory_bytes).
+        return read_cube_memory_bytes(self.tm1, self.cube_name, self.is_v12)
 
     def _has_string_elements(self, dimension_name: str) -> bool:
         hierarchy_name = "Leaves" if self.tm1.hierarchies.exists(
@@ -184,10 +172,10 @@ class OriginalOrderExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int,
                  measure_dimension_only_numeric: bool, original_dimension_order: List[str],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
-                 cancel_event=None):
+                 cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
-                         cancel_event)
+                         cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ORIGINAL_ORDER
         self.original_dimension_order = original_dimension_order
 
@@ -207,10 +195,10 @@ class MainExecutor(OptipyzerExecutor):
                  dimensions_to_exclude: List[str] = None,
                  orders_to_ignore: List[List[str]] = None,
                  checkpoint_manager=None, process_parameters: dict = None,
-                 dimension_position_rules: list = None, cancel_event=None):
+                 dimension_position_rules: list = None, cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
-                         cancel_event)
+                         cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.fast = fast
         self.dimensions_to_exclude = dimensions_to_exclude or []
@@ -387,10 +375,10 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int,
                  measure_dimension_only_numeric: bool, predefined_orders: List[List[str]],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
-                 cancel_event=None):
+                 cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
-                         cancel_event)
+                         cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.predefined_orders = predefined_orders
 
@@ -431,10 +419,10 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
                  target_position: int, context: ExecutionContext,
                  dimensions_to_exclude: List[str] = None, checkpoint_manager=None,
-                 process_parameters: dict = None, cancel_event=None):
+                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
-                         cancel_event)
+                         cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.target_position = target_position
         self.dimensions_to_exclude = dimensions_to_exclude or []
@@ -489,10 +477,10 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
                  target_dimension: str, context: ExecutionContext, checkpoint_manager=None,
-                 process_parameters: dict = None, cancel_event=None):
+                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
-                         cancel_event)
+                         cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.target_dimension = target_dimension
 

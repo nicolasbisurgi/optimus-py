@@ -17,6 +17,8 @@ from optimuspy.checkpoint import CheckpointManager
 from optimuspy.executors import (OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor,
                                  PositionOptimizerExecutor, DimensionOptimizerExecutor,
                                  OptimizationCancelled)
+from optimuspy.metrics import (detect_is_v12, cube_memory_used_bytes, memory_by_cube_bytes,
+                               ram_source_ready)
 from optimuspy.results import ExecutionContext, OptimusResult
 
 APP_NAME = "optimuspy"
@@ -164,36 +166,15 @@ def write_vmm_vmt(tm1: TM1Service, cube_name: str, vmm: str, vmt: str):
     tm1.cells.write_values_through_cellset(mdx, [vmm, vmt])
 
 
-def retrieve_performance_monitor_state(tm1: TM1Service):
-    config = tm1.server.get_active_configuration()
-    return config["Administration"]["PerformanceMonitorOn"]
-
-
-def activate_performance_monitor(tm1: TM1Service):
-    config = {
-        "Administration": {"PerformanceMonitorOn": True}
-    }
-    tm1.server.update_static_configuration(config)
-
-
-def deactivate_performance_monitor(tm1: TM1Service):
-    config = {
-        "Administration": {"PerformanceMonitorOn": False}
-    }
-    tm1.server.update_static_configuration(config)
-
-
 def retrieve_ram_usage(tm1: TM1Service, cube_name: str) -> float:
-    """Retrieve RAM usage for a cube from the performance monitor."""
-    mdx = """
-    SELECT
-    {{ [}}PerfCubes].[{}] }} ON ROWS,
-    {{ [}}StatsStatsByCube].[Total Memory Used] }} ON COLUMNS
-    FROM [}}StatsByCube]
-    WHERE ([}}TimeIntervals].[LATEST])
-    """.format(cube_name)
-    value = list(tm1.cells.execute_mdx_values(mdx=mdx))[0]
-    return float(value) if value else 0.0
+    """Retrieve a cube's RAM in bytes via MetricService (cube_memory_used).
+
+    Best-effort: returns 0.0 when the metric is absent (used only for set-mode
+    before/after logging, which is wrapped in a swallowing try/except).
+    """
+    rows = tm1.metrics.by_cube(cube=cube_name)
+    ram = cube_memory_used_bytes(rows)
+    return ram if ram else 0.0
 
 
 def main(mode: str, cube_config: dict, config_ini_path: str, password: str = None,
@@ -227,6 +208,11 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
         if tm1_holder is not None:
             tm1_holder["tm1"] = tm1
 
+        # Detect the major version once; gates the Performance Monitor lifecycle
+        # and the RAM read-retry behaviour (see optimuspy.metrics).
+        is_v12 = detect_is_v12(tm1)
+        logging.info(f"Connected to TM1 {'v12' if is_v12 else 'v11'} instance '{instance_name}'")
+
         # Validate cube exists
         if not tm1.cubes.exists(cube_name):
             logging.error(f"Cube '{cube_name}' does not exist")
@@ -249,7 +235,7 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
 
         # SET mode: apply order directly, no benchmarking
         if mode == 'set':
-            return _execute_set_mode(tm1, cube_name, predefined_orders[0])
+            return _execute_set_mode(tm1, cube_name, predefined_orders[0], is_v12)
 
         # OPTIMIZE mode
         return _execute_optimize_mode(
@@ -257,7 +243,7 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
             output, update, fast, dimensions_to_exclude, predefined_orders,
             orders_to_ignore, optimize_position, optimize_dimension,
             initial_dimension_order, cube_config, no_resume, tm1_checkpoint,
-            process_parameters, dimension_position_rules, cancel_event)
+            process_parameters, dimension_position_rules, cancel_event, is_v12)
 
 
 def _deduplicate_results(*result_lists):
@@ -271,35 +257,25 @@ def _deduplicate_results(*result_lists):
     return unique
 
 
-def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str]) -> bool:
+def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str], is_v12: bool = False) -> bool:
     logging.info(f"SET mode: applying dimension order for cube '{cube_name}' to: {target_order}")
 
-    original_performance_monitor_state = None
+    # Before/after RAM logging is best-effort; never let the RAM source lifecycle
+    # block the actual reorder, which is the primary purpose of set mode.
     ram_before = None
-    try:
-        original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
-        activate_performance_monitor(tm1)
+    with suppress(Exception), ram_source_ready(tm1, is_v12):
         ram_before = retrieve_ram_usage(tm1, cube_name)
-    except Exception:
-        pass
 
-    try:
-        tm1.cubes.update_storage_dimension_order(cube_name, target_order)
-        logging.info(f"Dimension order updated for cube '{cube_name}'")
+    tm1.cubes.update_storage_dimension_order(cube_name, target_order)
+    logging.info(f"Dimension order updated for cube '{cube_name}'")
 
-        try:
-            time.sleep(5)
-            ram_after = retrieve_ram_usage(tm1, cube_name)
-            if ram_before and ram_after:
-                logging.info(f"RAM before: {ram_before / 1024 ** 3:.2f} GB, after: {ram_after / 1024 ** 3:.2f} GB")
-        except Exception:
-            pass
+    with suppress(Exception), ram_source_ready(tm1, is_v12):
+        time.sleep(5)
+        ram_after = retrieve_ram_usage(tm1, cube_name)
+        if ram_before and ram_after:
+            logging.info(f"RAM before: {ram_before / 1024 ** 3:.2f} GB, after: {ram_after / 1024 ** 3:.2f} GB")
 
-        return True
-    finally:
-        with suppress(Exception):
-            if original_performance_monitor_state is not None and not original_performance_monitor_state:
-                deactivate_performance_monitor(tm1)
+    return True
 
 
 def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
@@ -313,12 +289,13 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                            tm1_checkpoint: bool = False,
                            process_parameters: dict = None,
                            dimension_position_rules: list = None,
-                           cancel_event=None) -> bool:
-    original_performance_monitor_state = retrieve_performance_monitor_state(tm1)
-    activate_performance_monitor(tm1)
-
-    original_vmm, original_vmt = retrieve_vmm_vmt(tm1, cube_name)
-    write_vmm_vmt(tm1, cube_name, "1000000", "1000000")
+                           cancel_event=None, is_v12: bool = False) -> bool:
+    # VMM/VMT live in the }CubeProperties control cube, which only exists on v11.
+    # On v12 those caps are gone, so we neither raise nor restore them there.
+    original_vmm, original_vmt = (None, None)
+    if not is_v12:
+        original_vmm, original_vmt = retrieve_vmm_vmt(tm1, cube_name)
+        write_vmm_vmt(tm1, cube_name, "1000000", "1000000")
 
     displayed_dimension_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
     measure_dimension_only_numeric = is_dimension_only_numeric(tm1, initial_dimension_order[-1])
@@ -365,129 +342,126 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
         logging.info("--no-resume specified — ignoring existing checkpoint")
         checkpoint_mgr.remove()
 
-    try:
-        # Benchmark original order (skip if resumed)
-        if original_order_result is None:
-            original_executor = OriginalOrderExecutor(
-                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                measure_dimension_only_numeric, initial_dimension_order, context,
-                checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                cancel_event=cancel_event)
-            permutation_results += original_executor.execute()
-            original_order_result = permutation_results[0]
+    with ram_source_ready(tm1, is_v12):
+        try:
+            # Benchmark original order (skip if resumed)
+            if original_order_result is None:
+                original_executor = OriginalOrderExecutor(
+                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                    measure_dimension_only_numeric, initial_dimension_order, context,
+                    checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
+                    cancel_event=cancel_event, is_v12=is_v12)
+                permutation_results += original_executor.execute()
+                original_order_result = permutation_results[0]
 
-            # Save initial checkpoint with original order result
-            checkpoint_mgr.save(
-                executor_type="OriginalOrderExecutor",
-                execution_context=context,
-                initial_dimension_order=initial_dimension_order,
-                last_applied_order=initial_dimension_order,
-                original_order_result=original_order_result,
-                completed_results=[])
+                # Save initial checkpoint with original order result
+                checkpoint_mgr.save(
+                    executor_type="OriginalOrderExecutor",
+                    execution_context=context,
+                    initial_dimension_order=initial_dimension_order,
+                    last_applied_order=initial_dimension_order,
+                    original_order_result=original_order_result,
+                    completed_results=[])
 
-        # Run iterations: targeted, predefined, or greedy algorithm
-        if optimize_position is not None:
-            resolved_pos = resolve_position(optimize_position, len(displayed_dimension_order))
-            logging.info(f"Optimizing position {resolved_pos + 1} (0-based: {resolved_pos}) "
-                         f"for cube '{cube_name}'")
-            executor = PositionOptimizerExecutor(
-                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                measure_dimension_only_numeric, resolved_pos, context, dimensions_to_exclude,
-                checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                cancel_event=cancel_event)
-        elif optimize_dimension:
-            if optimize_dimension not in displayed_dimension_order:
-                raise ValueError(
-                    f"Dimension '{optimize_dimension}' not found in cube '{cube_name}'. "
-                    f"Available: {displayed_dimension_order}")
-            logging.info(f"Optimizing dimension '{optimize_dimension}' for cube '{cube_name}'")
-            executor = DimensionOptimizerExecutor(
-                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                measure_dimension_only_numeric, optimize_dimension, context,
-                checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                cancel_event=cancel_event)
-        elif predefined_orders:
-            executor = PredefinedOrderExecutor(
-                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                measure_dimension_only_numeric, predefined_orders, context,
-                checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                cancel_event=cancel_event)
-        else:
-            executor = MainExecutor(
-                tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore,
-                checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                dimension_position_rules=dimension_position_rules, cancel_event=cancel_event)
-
-        # Set resume context on executor
-        executor.set_resume_context(initial_dimension_order, original_order_result, resumed_results)
-
-        # Execute (with resume state if available)
-        new_results = executor.execute(resume_state=resume_state)
-        permutation_results += new_results
-
-        # Combine resumed + new results for final analysis
-        unique_results = _deduplicate_results(
-            [original_order_result], resumed_results, permutation_results)
-
-        optimus_result = OptimusResult(cube_name, unique_results, instance_name=instance_name)
-        best_permutation = optimus_result.best_result
-        logging.info(f"Completed analysis for cube '{cube_name}'")
-
-        if not best_permutation:
-            tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
-            logging.info(
-                f"No ideal dimension order found for cube '{cube_name}'. "
-                f"Restored original order to {initial_dimension_order}. "
-                f"Please pick manually based on results.")
-        else:
-            best_order = best_permutation.dimension_order
-            if update:
-                tm1.cubes.update_storage_dimension_order(cube_name, best_order)
-                logging.info(f"Updated dimension order for cube '{cube_name}' to {best_order}")
+            # Run iterations: targeted, predefined, or greedy algorithm
+            if optimize_position is not None:
+                resolved_pos = resolve_position(optimize_position, len(displayed_dimension_order))
+                logging.info(f"Optimizing position {resolved_pos + 1} (0-based: {resolved_pos}) "
+                             f"for cube '{cube_name}'")
+                executor = PositionOptimizerExecutor(
+                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                    measure_dimension_only_numeric, resolved_pos, context, dimensions_to_exclude,
+                    checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
+                    cancel_event=cancel_event, is_v12=is_v12)
+            elif optimize_dimension:
+                if optimize_dimension not in displayed_dimension_order:
+                    raise ValueError(
+                        f"Dimension '{optimize_dimension}' not found in cube '{cube_name}'. "
+                        f"Available: {displayed_dimension_order}")
+                logging.info(f"Optimizing dimension '{optimize_dimension}' for cube '{cube_name}'")
+                executor = DimensionOptimizerExecutor(
+                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                    measure_dimension_only_numeric, optimize_dimension, context,
+                    checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
+                    cancel_event=cancel_event, is_v12=is_v12)
+            elif predefined_orders:
+                executor = PredefinedOrderExecutor(
+                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                    measure_dimension_only_numeric, predefined_orders, context,
+                    checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
+                    cancel_event=cancel_event, is_v12=is_v12)
             else:
-                logging.info(f"Best order for cube '{cube_name}': {best_order}")
+                executor = MainExecutor(
+                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
+                    measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore,
+                    checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
+                    dimension_position_rules=dimension_position_rules, cancel_event=cancel_event,
+                    is_v12=is_v12)
+
+            # Set resume context on executor
+            executor.set_resume_context(initial_dimension_order, original_order_result, resumed_results)
+
+            # Execute (with resume state if available)
+            new_results = executor.execute(resume_state=resume_state)
+            permutation_results += new_results
+
+            # Combine resumed + new results for final analysis
+            unique_results = _deduplicate_results(
+                [original_order_result], resumed_results, permutation_results)
+
+            optimus_result = OptimusResult(cube_name, unique_results, instance_name=instance_name)
+            best_permutation = optimus_result.best_result
+            logging.info(f"Completed analysis for cube '{cube_name}'")
+
+            if not best_permutation:
                 tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
-                logging.info(f"Restored original dimension order for cube '{cube_name}'")
-
-        # Success — remove checkpoint
-        checkpoint_mgr.remove()
-
-    except OptimizationCancelled:
-        raise  # Let caller (JobManager) handle cancellation cleanly
-    except Exception as e:
-        logging.error(f"Fatal error: {e}", exc_info=True)
-        logging.info("Re-run the same command to resume from checkpoint")
-        return False
-
-    finally:
-        with suppress(Exception):
-            write_vmm_vmt(tm1, cube_name, original_vmm, original_vmt)
-
-        with suppress(Exception):
-            if original_performance_monitor_state:
-                activate_performance_monitor(tm1)
+                logging.info(
+                    f"No ideal dimension order found for cube '{cube_name}'. "
+                    f"Restored original order to {initial_dimension_order}. "
+                    f"Please pick manually based on results.")
             else:
-                deactivate_performance_monitor(tm1)
+                best_order = best_permutation.dimension_order
+                if update:
+                    tm1.cubes.update_storage_dimension_order(cube_name, best_order)
+                    logging.info(f"Updated dimension order for cube '{cube_name}' to {best_order}")
+                else:
+                    logging.info(f"Best order for cube '{cube_name}': {best_order}")
+                    tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
+                    logging.info(f"Restored original dimension order for cube '{cube_name}'")
 
-        # Build results from whatever we have (resumed + new)
-        unique_for_output = _deduplicate_results(
-            [original_order_result], resumed_results, permutation_results)
+            # Success — remove checkpoint
+            checkpoint_mgr.remove()
 
-        if unique_for_output:
-            if optimus_result is None:
-                optimus_result = OptimusResult(cube_name, unique_for_output, instance_name=instance_name)
-            else:
-                optimus_result.instance_name = instance_name
-            file_base = RESULT_FILENAME.format(instance_name, cube_name, TIME_STAMP)
-            instance_dir = RESULT_PATH / instance_name
+        except OptimizationCancelled:
+            raise  # Let caller (JobManager) handle cancellation cleanly
+        except Exception as e:
+            logging.error(f"Fatal error: {e}", exc_info=True)
+            logging.info("Re-run the same command to resume from checkpoint")
+            return False
 
-            optimus_result.to_html(instance_dir / f"{file_base}.html", total_duration=context.elapsed)
+        finally:
+            if not is_v12:
+                with suppress(Exception):
+                    write_vmm_vmt(tm1, cube_name, original_vmm, original_vmt)
 
-            if output.upper() == "XLSX":
-                optimus_result.to_xlsx(instance_dir / f"{file_base}.xlsx")
-            else:
-                optimus_result.to_csv(instance_dir / f"{file_base}.csv")
+            # Build results from whatever we have (resumed + new)
+            unique_for_output = _deduplicate_results(
+                [original_order_result], resumed_results, permutation_results)
+
+            if unique_for_output:
+                if optimus_result is None:
+                    optimus_result = OptimusResult(cube_name, unique_for_output, instance_name=instance_name)
+                else:
+                    optimus_result.instance_name = instance_name
+                file_base = RESULT_FILENAME.format(instance_name, cube_name, TIME_STAMP)
+                instance_dir = RESULT_PATH / instance_name
+
+                optimus_result.to_html(instance_dir / f"{file_base}.html", total_duration=context.elapsed)
+
+                if output.upper() == "XLSX":
+                    optimus_result.to_xlsx(instance_dir / f"{file_base}.xlsx")
+                else:
+                    optimus_result.to_csv(instance_dir / f"{file_base}.csv")
 
     return True
 
@@ -572,36 +546,15 @@ def _collect_dimension_metadata(tm1: TM1Service, dimension_names: list) -> list:
 
 
 def _scan_to_data(tm1: TM1Service, instance_name: str, ram_threshold_pct: int = 60,
-                   include_optimized: bool = False) -> dict:
+                   include_optimized: bool = False, is_v12: bool = False) -> dict:
     """Core scan logic — returns structured data. Used by both CLI and UI."""
-    original_perf_state = None
-    try:
-        original_perf_state = retrieve_performance_monitor_state(tm1)
-        activate_performance_monitor(tm1)
-
-        # Single MDX: get RAM for all non-control cubes (includes 'Cubes Total' row)
-        mdx = """
-        SELECT
-          NON EMPTY {[}StatsStatsByCube].[}StatsStatsByCube].[Total Memory Used]} ON COLUMNS,
-          NON EMPTY EXCEPT(
-            {TM1SUBSETALL([}PerfCubes].[}PerfCubes])},
-            {TM1FILTERBYPATTERN({TM1SUBSETALL([}PerfCubes].[}PerfCubes])}, "}*")}
-          ) ON ROWS
-        FROM [}StatsByCube]
-        WHERE ([}TimeIntervals].[}TimeIntervals].[LATEST])
-        """
-        df = tm1.cells.execute_mdx_dataframe(mdx)
-
-        ram_by_cube = {}
-        for _, row in df.iterrows():
-            cube = str(row["}PerfCubes"])
-            if cube == "Cubes Total":
-                continue
-            try:
-                ram_value = float(row["Value"])
-            except (ValueError, TypeError):
-                continue
-            ram_by_cube[cube] = ram_value
+    with ram_source_ready(tm1, is_v12):
+        # Single round-trip: cube_memory_used (bytes) for all non-control cubes.
+        # by_cube() already excludes }-control cubes and the synthetic 'Cubes Total'
+        # row on both v11 and v12, and converts each value to bytes by its Unit —
+        # so OptimusPy's old EXCEPT/TM1FILTERBYPATTERN("}*") and Cubes-Total skip
+        # logic is no longer needed.
+        ram_by_cube = memory_by_cube_bytes(tm1.metrics.by_cube())
 
         total_model_ram = sum(ram_by_cube.values())
         if total_model_ram <= 0:
@@ -652,11 +605,6 @@ def _scan_to_data(tm1: TM1Service, instance_name: str, ram_threshold_pct: int = 
                 "suggested_order": suggested,
             })
 
-    finally:
-        with suppress(Exception):
-            if original_perf_state is not None and not original_perf_state:
-                deactivate_performance_monitor(tm1)
-
     return {
         "total_model_ram": total_model_ram,
         "total_model_ram_gb": total_model_ram / (1024 ** 3),
@@ -665,41 +613,18 @@ def _scan_to_data(tm1: TM1Service, instance_name: str, ram_threshold_pct: int = 
 
 
 def _scan_to_data_light(tm1: TM1Service, instance_name: str, ram_threshold_pct: int = 60,
-                        include_optimized: bool = False) -> dict:
+                        include_optimized: bool = False, is_v12: bool = False) -> dict:
     """Lightweight scan — RAM + dimension names + storage order + last-dim string check only.
 
     Skips the expensive per-dimension metadata collection (_collect_dimension_metadata).
     Per cube: get_dimension_names (1 call) + get_storage_dimension_order (1 call)
               + get_number_of_string_elements for last dim only (1 call) = 3 API calls.
     """
-    original_perf_state = None
-    try:
-        original_perf_state = retrieve_performance_monitor_state(tm1)
-        activate_performance_monitor(tm1)
-
-        # Single MDX: get RAM for all non-control cubes
-        mdx = """
-        SELECT
-          NON EMPTY {[}StatsStatsByCube].[}StatsStatsByCube].[Total Memory Used]} ON COLUMNS,
-          NON EMPTY EXCEPT(
-            {TM1SUBSETALL([}PerfCubes].[}PerfCubes])},
-            {TM1FILTERBYPATTERN({TM1SUBSETALL([}PerfCubes].[}PerfCubes])}, "}*")}
-          ) ON ROWS
-        FROM [}StatsByCube]
-        WHERE ([}TimeIntervals].[}TimeIntervals].[LATEST])
-        """
-        df = tm1.cells.execute_mdx_dataframe(mdx)
-
-        ram_by_cube = {}
-        for _, row in df.iterrows():
-            cube = str(row["}PerfCubes"])
-            if cube == "Cubes Total":
-                continue
-            try:
-                ram_value = float(row["Value"])
-            except (ValueError, TypeError):
-                continue
-            ram_by_cube[cube] = ram_value
+    with ram_source_ready(tm1, is_v12):
+        # Single round-trip: cube_memory_used (bytes) for all non-control cubes.
+        # by_cube() already excludes }-control cubes and the synthetic 'Cubes Total'
+        # row on both v11 and v12, and converts each value to bytes by its Unit.
+        ram_by_cube = memory_by_cube_bytes(tm1.metrics.by_cube())
 
         total_model_ram = sum(ram_by_cube.values())
         if total_model_ram <= 0:
@@ -755,11 +680,6 @@ def _scan_to_data_light(tm1: TM1Service, instance_name: str, ram_threshold_pct: 
                 "last_dim_has_strings": last_dim_has_strings,
             })
 
-    finally:
-        with suppress(Exception):
-            if original_perf_state is not None and not original_perf_state:
-                deactivate_performance_monitor(tm1)
-
     return {
         "total_model_ram": total_model_ram,
         "total_model_ram_gb": total_model_ram / (1024 ** 3),
@@ -771,8 +691,10 @@ def _execute_scan_mode(tm1: TM1Service, instance_name: str, ram_threshold_pct: i
                        output_dir: str = None) -> bool:
     logging.info(f"Scanning instance '{instance_name}' for optimization candidates...")
 
+    is_v12 = detect_is_v12(tm1)
+
     try:
-        data = _scan_to_data(tm1, instance_name, ram_threshold_pct)
+        data = _scan_to_data(tm1, instance_name, ram_threshold_pct, is_v12=is_v12)
     except ValueError as e:
         logging.error(str(e))
         return False
