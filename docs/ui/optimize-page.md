@@ -10,7 +10,7 @@ The Optimize page is the heart of OptimusPy. Connect to an instance, scan for ca
 2. Adjust the **RAM threshold** slider to control how aggressively cubes are filtered (default: 60% of total model RAM).
 3. Toggle **Include Optimized** to also list cubes that already have a custom storage order.
 
-The scan calls `}StatsByCube` on the TM1 server — a single fast MDX query. Results are cached locally for 24 hours; click **Re-scan** to refresh.
+The scan reads from the TM1py Metrics service (`cube_memory_used`), version-agnostic across v11 and v12 — a single fast round-trip. Results are cached locally for 24 hours; click **Re-scan** to refresh.
 
 ## Cube workspace
 

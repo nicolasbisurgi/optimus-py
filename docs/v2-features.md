@@ -220,7 +220,7 @@ optimuspy scan --instance tm1srv01 --ram-percent 80 --output configs/
 ```
 
 The scan:
-1. Queries `}StatsByCube` for RAM usage across all non-control cubes (including the "Cubes Total" row for total model RAM)
+1. Reads RAM usage across all non-control cubes from the TM1py Metrics service (`cube_memory_used`), version-agnostic across v11 and v12 (the service already excludes `}`-control cubes and the synthetic "Cubes Total" row)
 2. Sorts cubes by RAM descending and selects those that account for up to N% of total model RAM (default: 60%, configurable via `--ram-percent`)
 3. Removes cubes that have already been optimized (where the internal storage order differs from the visible order)
 4. Prints a summary table with each cube's share of total RAM

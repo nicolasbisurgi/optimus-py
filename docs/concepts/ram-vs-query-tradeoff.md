@@ -24,7 +24,7 @@ If you don't specify any views, query time is not measured and the result is ran
 
 ## Composite RAM
 
-Just one number: the cube's total memory used after the order is applied (read from `}StatsByCube` → `Total Memory Used`). RAM is measured **after** all queries have run, so it reflects the steady-state footprint.
+Just one number: the cube's total memory used after the order is applied (read from the TM1py Metrics service (`cube_memory_used`), version-agnostic across v11 and v12). RAM is measured **after** all queries have run, so it reflects the steady-state footprint.
 
 ## Picking the best result
 

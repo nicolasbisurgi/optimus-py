@@ -29,6 +29,7 @@ from optimuspy.core import (
     set_current_directory, _collect_dimension_metadata, _compute_suggested_order
 )
 from optimuspy.executors import OptimizationCancelled
+from optimuspy.metrics import detect_is_v12
 
 DEFAULT_PORT = 8765
 DEFAULT_CONFIG_INI = "config/config.ini"
@@ -646,7 +647,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "Missing 'instance'"})
         try:
             with _create_tm1_connection(instance, password) as tm1:
-                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized)
+                is_v12 = detect_is_v12(tm1)
+                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized, is_v12=is_v12)
                 self._send_json(200, data)
         except Exception as e:
             self._send_json(500, {"error": f"Scan failed: {e}"})
@@ -919,7 +921,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "Missing 'instance'"})
         try:
             with _create_tm1_connection(instance, password) as tm1:
-                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized=True)
+                is_v12 = detect_is_v12(tm1)
+                data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized=True, is_v12=is_v12)
                 self._send_json(200, data)
         except Exception as e:
             self._send_json(500, {"error": f"Scan failed: {e}"})

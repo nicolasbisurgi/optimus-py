@@ -14,7 +14,7 @@ OptimusPy benchmarks dimension orders by physically reordering the cube on the T
        b. Clear cube cache
        c. Run each view N times — record query times
        d. Run each process N times — record process times
-       e. Read RAM from }StatsByCube
+       e. Read RAM from the TM1py Metrics service (`cube_memory_used`), version-agnostic across v11 and v12
        f. Save a checkpoint
 5. Pick the best result by composite score
 6. Apply best (if update=true) or restore the original

@@ -14,6 +14,11 @@ configs/
 test.py
 CLAUDE.md
 
+# v11/v12 parity validation snapshots (run artifacts; logs already covered by *.log)
+parity.json
+v11_before.json
+v11_after.json
+
 # mkdocs build output
 mkdocs_site/
 
