@@ -25,7 +25,7 @@ from TM1py import TM1Service
 
 from optimuspy.core import (
     get_tm1_config, validate_cube_config,
-    main as run_optimuspy, _scan_to_data_light, APP_NAME, RESULT_PATH,
+    main as run_optimuspy, _scan_to_data_light, APP_NAME, get_logfile_path, RESULT_PATH,
     set_current_directory, _collect_dimension_metadata, _compute_suggested_order
 )
 from optimuspy.executors import OptimizationCancelled
@@ -1085,11 +1085,15 @@ def main():
     if getattr(sys, 'frozen', False):
         set_current_directory()
 
-    # Configure logging
+    # Configure logging: write to <install dir>/logs/optimuspy.log and echo to the console
+    log_path = get_logfile_path()
     logging.basicConfig(
         format="%(asctime)s - optimuspy-ui - %(levelname)s - %(message)s",
         level=logging.INFO,
-        stream=sys.stdout,
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
 
     server = HTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
@@ -1099,6 +1103,7 @@ def main():
     print(f"  {'─' * 40}")
     print(f"  URL:        {url}")
     print(f"  Config:     {_config_ini_path}")
+    print(f"  Log:        {log_path}")
     print("  Press Ctrl+C to stop\n")
 
     # Auto-open browser
