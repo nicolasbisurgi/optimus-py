@@ -41,6 +41,30 @@ def set_current_directory():
     return directory
 
 
+def get_app_base_dir() -> Path:
+    """Return the application's install directory.
+
+    For a PyInstaller frozen build this is the directory containing the executable;
+    for a source/repo run it is the project root (two levels above this package:
+    src/optimuspy/core.py -> repo root).
+    """
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def get_logfile_path() -> Path:
+    """Resolve the optimuspy.log path under a logs/ directory in the install dir.
+
+    Pinned to the install directory (see get_app_base_dir), so the log always lands
+    in the same place regardless of the current working directory or a relative config
+    path. The logs/ directory is created if it does not exist.
+    """
+    logs_dir = get_app_base_dir() / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir / LOGFILE
+
+
 def configure_logging():
     logging.basicConfig(
         filename=LOGFILE,
