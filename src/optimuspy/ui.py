@@ -26,7 +26,8 @@ from TM1py import TM1Service
 from optimuspy.core import (
     get_tm1_config, validate_cube_config,
     main as run_optimuspy, _scan_to_data_light, APP_NAME, get_logfile_path, RESULT_PATH,
-    set_current_directory, _collect_dimension_metadata, _compute_suggested_order
+    set_current_directory, _collect_dimension_metadata, _compute_suggested_order,
+    resolve_config_path
 )
 from optimuspy.executors import OptimizationCancelled
 from optimuspy.metrics import detect_is_v12
@@ -36,6 +37,7 @@ DEFAULT_CONFIG_INI = "config/config.ini"
 
 # Global state
 _config_ini_path = DEFAULT_CONFIG_INI
+_config_read_only = False
 
 
 def _resolve_static_dir() -> Path:
@@ -546,7 +548,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             instances = [s for s in config.sections()]
             self._send_json(200, {
                 "instances": instances,
-                "config_path": _config_ini_path
+                "config_path": _config_ini_path,
+                "read_only": _config_read_only,
             })
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -562,6 +565,9 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(e)})
 
     def _handle_update_instance(self, instance_name: str, body: dict):
+        if _config_read_only:
+            return self._send_json(403, {"error":
+                "This config.ini is managed externally and is read-only in OptimusPy."})
         try:
             config = get_tm1_config(_config_ini_path)
             if instance_name not in config:
@@ -576,6 +582,9 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(e)})
 
     def _handle_create_instance(self, body: dict):
+        if _config_read_only:
+            return self._send_json(403, {"error":
+                "This config.ini is managed externally and is read-only in OptimusPy."})
         name = body.get("name", "").strip()
         if not name:
             return self._send_json(400, {"error": "Missing 'name'"})
@@ -596,6 +605,9 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(e)})
 
     def _handle_delete_instance(self, instance_name: str):
+        if _config_read_only:
+            return self._send_json(403, {"error":
+                "This config.ini is managed externally and is read-only in OptimusPy."})
         try:
             config = get_tm1_config(_config_ini_path)
             if instance_name not in config:
@@ -608,6 +620,9 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(e)})
 
     def _handle_delete_instance_field(self, instance_name: str, field_key: str):
+        if _config_read_only:
+            return self._send_json(403, {"error":
+                "This config.ini is managed externally and is read-only in OptimusPy."})
         try:
             config = get_tm1_config(_config_ini_path)
             if instance_name not in config:
@@ -1070,16 +1085,22 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def main():
-    global _config_ini_path
+    global _config_ini_path, _config_read_only
 
     parser = argparse.ArgumentParser(description="OptimusPy Workflow UI")
     parser.add_argument('--port', type=int, default=DEFAULT_PORT,
                         help=f"Port to listen on (default: {DEFAULT_PORT})")
-    parser.add_argument('--config', dest='config_ini', default=DEFAULT_CONFIG_INI,
+    parser.add_argument('--config', dest='config_ini', default=None,
                         help=f"Path to TM1 connection config.ini (default: {DEFAULT_CONFIG_INI})")
     args = parser.parse_args()
 
-    _config_ini_path = args.config_ini
+    try:
+        location = resolve_config_path(args.config_ini)
+    except FileNotFoundError as e:
+        print(f"ERROR: config.ini not found: {e}")
+        sys.exit(1)
+    _config_ini_path = location.path
+    _config_read_only = location.read_only
 
     # Only change CWD for frozen exe — pip/script users expect CWD-relative paths
     if getattr(sys, 'frozen', False):
@@ -1102,7 +1123,7 @@ def main():
     print("\n  OptimusPy Workflow UI")
     print(f"  {'─' * 40}")
     print(f"  URL:        {url}")
-    print(f"  Config:     {_config_ini_path}")
+    print(f"  Config:     {_config_ini_path}{' (read-only)' if _config_read_only else ''}")
     print(f"  Log:        {log_path}")
     print("  Press Ctrl+C to stop\n")
 
