@@ -31,6 +31,17 @@ _Avoid_: assuming a fixed unit; hardcoding `×1024`
 
 Behavior is **frozen** — only the *data source* changes. The RAM model is unchanged: read a **RAM baseline** once at the start, then derive every other permutation's RAM by applying the `%` change that `update_storage_dimension_order` returns (confirmed to return a real `%` on v11 **and** v12). OptimusPy does **not** read per-permutation memory from the server. The migration swaps the `}StatsByCube` MDX reads for `MetricService.by_cube()` reads. On v11 the Performance Monitor must still be active before reading (toggled via `tm1.metrics` lifecycle methods); on v12 nothing is toggled because the metric is always available. The VMM/VMT cap raise-and-restore is v11-only too — it reads/writes the `}CubeProperties` control cube, which does not exist on v12, so optimize mode simply skips it there.
 
+## config.ini location resolution
+
+Both entry points (`optimuspy` CLI and `python -m optimuspy.ui`) resolve the connection config the same way, via `resolve_config_path`:
+
+- `--config PATH` (explicit) beats the built-in default.
+- No `--config` ⇒ falls back to `config/config.ini`, which stays **writable** (the UI Settings page can create/edit/delete instances in it).
+- Explicit `--config PATH` ⇒ treated as owned by another tool and **read-only**; OptimusPy never writes to it. This is what lets a `config.ini` be shared safely with other tm1py tools (e.g. RushTI) instead of duplicating credentials.
+- Explicit `--config PATH` that doesn't exist ⇒ fail-fast: print `ERROR: config.ini not found: <path>` and exit 1, no traceback. (The default path has no such existence check; it's left to the existing read path.)
+
+Out of scope / not shipped: no environment-variable override, no keyring integration (deferred to a later phase), no comment-preserving INI writer.
+
 ## Flagged ambiguities
 
 - "RAM" / "memory" was used loosely — resolved: OptimusPy's internal canonical unit is **bytes**; conversion from the metric's reported **Unit** happens once, at the read boundary, so all downstream `/ 1024**3` GB math is unchanged.

@@ -46,6 +46,19 @@ You can use this public Google Sheet to construct the command prompt for the exe
 
 https://docs.google.com/spreadsheets/d/1dtgl9WkYcsyokWNdX29m4K_5oNm3MI3iTOH2f_g6Kd4/edit?usp=sharing
 
+## Config file (`--config`)
+
+Both the CLI (`optimuspy`) and the web UI (`python -m optimuspy.ui`) accept a `--config PATH` option pointing at a TM1 connection `config.ini`:
+
+```bash
+optimuspy scan --instance tm1srv01 --config C:\shared\config.ini
+python -m optimuspy.ui --config C:\shared\config.ini
+```
+
+- **Default** (flag omitted): `config/config.ini`, fully writable — the UI's Settings page can create, edit, and delete instances in it.
+- **Explicit path** (`--config` supplied): treated as owned by another tool and **read-only** — OptimusPy never writes to it. This lets you point OptimusPy at a `config.ini` shared with other tm1py tools (e.g. RushTI) without duplicating credentials. In the UI, the Settings page shows a read-only banner and hides the create/edit/delete controls for that file (Test Connection still works).
+- If the path passed to `--config` does not exist, OptimusPy prints `ERROR: config.ini not found: <path>` and exits immediately (exit code 1).
+
 ## Output
 
 OptimusPy determines the ideal dimension order for every cube, based on RAM and query speed.

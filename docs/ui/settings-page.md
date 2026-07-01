@@ -12,6 +12,10 @@ Theme switcher: **System** (follows OS preference), **Light**, or **Dark**. Pers
 
 A tab per instance defined in `config.ini`. Each tab shows the instance's fields as editable rows.
 
+### Read-only config.ini
+
+If OptimusPy was launched with an explicit `--config PATH` (see [TM1 Connection](../getting-started/tm1-connection.md#sharing-configini-across-tools)), that file is treated as owned by another tool and the Settings page switches to read-only mode: a banner explains that the config is managed externally, and the create/edit/delete controls below are hidden. **Test Connection** still works, since it doesn't write to the file. The default `config/config.ini` (no `--config` flag) is never read-only.
+
 ### Editing fields
 
 - Click any value to edit it.

@@ -97,3 +97,16 @@ decode_b64=True
 You don't have to hand-edit `config.ini`. The **Settings → TM1 Instances** page provides full CRUD: add/remove fields, create/delete instances, and **Test Connection** before saving.
 
 [Settings Page →](../ui/settings-page.md)
+
+## Sharing config.ini across tools
+
+If you already maintain a `config.ini` for another tm1py tool (e.g. [RushTI](https://github.com/cubewise-code/rushti)), you don't need a second copy for OptimusPy. Point OptimusPy at the shared file with `--config`:
+
+```bash
+optimuspy scan --instance tm1srv01 --config /path/to/shared/config.ini
+python -m optimuspy.ui --config /path/to/shared/config.ini
+```
+
+OptimusPy then consumes that file **read-only** — it never writes to it, so both tools can safely read the same credentials without stepping on each other. Manage the file's contents (add instances, rotate passwords) in whichever tool owns it; in OptimusPy's UI the Settings page reflects this with a read-only banner and disabled edit controls (Test Connection still works).
+
+This only applies when `--config` is passed explicitly. Without the flag, OptimusPy falls back to its own default `config/config.ini`, which remains fully editable from the Settings page.
