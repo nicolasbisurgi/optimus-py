@@ -18,6 +18,7 @@ const OptimusPy = (function () {
     password: null,
     connected: false,
     serverName: null,
+    configReadOnly: false,
 
     // Scan
     scanData: null,
@@ -1366,6 +1367,7 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getInstances();
         state.instances = data.instances || [];
+        state.configReadOnly = data.read_only || false;
         this.renderInstanceSwitcher();
       } catch (err) {
         Toast.error("Failed to load instances: " + err.message);
@@ -3976,36 +3978,42 @@ const OptimusPy = (function () {
         const instancesCard = el("div", { className: "card mb-4" });
         instancesCard.appendChild(el("div", { className: "card-title mb-4" }, "TM1 Instances"));
 
-        // "New Instance" button
-        const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
-          const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
-          const bodyEl = el("div", null,
-            el("label", { className: "form-label" }, "Instance Name"),
-            nameInput,
-          );
-          Modal.open({
-            title: "New TM1 Instance",
-            body: bodyEl,
-            footer: [
-              el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
-              el("button", { className: "btn btn-primary", onClick: async () => {
-                const name = nameInput.value.trim();
-                if (!name) { Toast.error("Instance name is required"); return; }
-                try {
-                  await Api.createInstance(name, {});
-                  Toast.success(`Instance "${name}" created`);
-                  Modal.close();
-                  await Sidebar.loadInstances();
-                  this.mount();
-                } catch (err) {
-                  Toast.error(err.message);
-                }
-              }}, "Create"),
-            ],
-          });
-          nameInput.focus();
-        }}, el("span", { html: Icons.plus }), " New Instance");
-        instancesCard.appendChild(newInstanceBtn);
+        if (state.configReadOnly) {
+          instancesCard.appendChild(el("div", {
+            className: "readonly-banner mb-3",
+          }, "This config.ini is managed externally — read-only. Edit it where it is maintained (e.g. the shared file or RushTI)."));
+        } else {
+          // "New Instance" button
+          const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
+            const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
+            const bodyEl = el("div", null,
+              el("label", { className: "form-label" }, "Instance Name"),
+              nameInput,
+            );
+            Modal.open({
+              title: "New TM1 Instance",
+              body: bodyEl,
+              footer: [
+                el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
+                el("button", { className: "btn btn-primary", onClick: async () => {
+                  const name = nameInput.value.trim();
+                  if (!name) { Toast.error("Instance name is required"); return; }
+                  try {
+                    await Api.createInstance(name, {});
+                    Toast.success(`Instance "${name}" created`);
+                    Modal.close();
+                    await Sidebar.loadInstances();
+                    this.mount();
+                  } catch (err) {
+                    Toast.error(err.message);
+                  }
+                }}, "Create"),
+              ],
+            });
+            nameInput.focus();
+          }}, el("span", { html: Icons.plus }), " New Instance");
+          instancesCard.appendChild(newInstanceBtn);
+        }
 
         if (state.instances.length === 0) {
           instancesCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No instances configured. Add one to get started."));
@@ -4080,6 +4088,7 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getInstance(instanceName);
         const params = data.params || {};
+        const ro = state.configReadOnly;
         const fieldsContainer = el("div", { className: "instance-fields" });
 
         // Render existing fields (skip password — handled separately)
@@ -4088,48 +4097,57 @@ const OptimusPy = (function () {
           fieldsContainer.appendChild(this._createFieldRow(key, value, instanceName, fieldsContainer));
         });
         container.appendChild(fieldsContainer);
+        if (ro) {
+          fieldsContainer.querySelectorAll("input").forEach(i => { i.disabled = true; });
+          fieldsContainer.querySelectorAll("button").forEach(b => b.remove());
+        }
 
-        // "Add Field" button
-        const addFieldBtn = el("button", { className: "btn btn-secondary btn-sm mt-2", onClick: () => {
-          const row = this._createFieldRow("", "", instanceName, fieldsContainer, true);
-          fieldsContainer.appendChild(row);
-          // Focus the key input
-          const keyInput = row.querySelector("[data-field-key]");
-          if (keyInput) keyInput.focus();
-        }}, el("span", { html: Icons.plus }), " Add Field");
-        container.appendChild(addFieldBtn);
+        let pwInput = null;
+        if (!ro) {
+          // "Add Field" button
+          const addFieldBtn = el("button", { className: "btn btn-secondary btn-sm mt-2", onClick: () => {
+            const row = this._createFieldRow("", "", instanceName, fieldsContainer, true);
+            fieldsContainer.appendChild(row);
+            // Focus the key input
+            const keyInput = row.querySelector("[data-field-key]");
+            if (keyInput) keyInput.focus();
+          }}, el("span", { html: Icons.plus }), " Add Field");
+          container.appendChild(addFieldBtn);
 
-        // Password field (write-only)
-        const pwGroup = el("div", { className: "form-group mt-4" });
-        pwGroup.appendChild(el("label", { className: "form-label" }, "Update Password (write-only)"));
-        const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Leave empty to keep current", dataset: { key: "password" } });
-        pwGroup.appendChild(pwInput);
-        container.appendChild(pwGroup);
+          // Password field (write-only)
+          const pwGroup = el("div", { className: "form-group mt-4" });
+          pwGroup.appendChild(el("label", { className: "form-label" }, "Update Password (write-only)"));
+          pwInput = el("input", { className: "form-input", type: "password", placeholder: "Leave empty to keep current", dataset: { key: "password" } });
+          pwGroup.appendChild(pwInput);
+          container.appendChild(pwGroup);
+        }
 
         // Action buttons row
         const actionsRow = el("div", { className: "flex gap-2 mt-4 flex-wrap" });
 
-        // Save button
-        const saveBtn = el("button", { className: "btn btn-primary" }, "Save");
-        saveBtn.addEventListener("click", async () => {
-          const newParams = {};
-          fieldsContainer.querySelectorAll("[data-field-row]").forEach(row => {
-            const keyEl = row.querySelector("[data-field-key]");
-            const valEl = row.querySelector("[data-field-value]");
-            const key = keyEl ? (keyEl.dataset.fieldKey || keyEl.value || "").trim() : "";
-            const val = valEl ? valEl.value : "";
-            if (key) newParams[key] = val;
+        if (!ro) {
+          // Save button
+          const saveBtn = el("button", { className: "btn btn-primary" }, "Save");
+          saveBtn.addEventListener("click", async () => {
+            const newParams = {};
+            fieldsContainer.querySelectorAll("[data-field-row]").forEach(row => {
+              const keyEl = row.querySelector("[data-field-key]");
+              const valEl = row.querySelector("[data-field-value]");
+              const key = keyEl ? (keyEl.dataset.fieldKey || keyEl.value || "").trim() : "";
+              const val = valEl ? valEl.value : "";
+              if (key) newParams[key] = val;
+            });
+            // Include password only if non-empty
+            if (pwInput.value) newParams.password = pwInput.value;
+            try {
+              await Api.updateInstance(instanceName, newParams);
+              Toast.success(`Config saved for ${instanceName}`);
+            } catch (err) {
+              Toast.error(err.message);
+            }
           });
-          // Include password only if non-empty
-          if (pwInput.value) newParams.password = pwInput.value;
-          try {
-            await Api.updateInstance(instanceName, newParams);
-            Toast.success(`Config saved for ${instanceName}`);
-          } catch (err) {
-            Toast.error(err.message);
-          }
-        });
-        actionsRow.appendChild(saveBtn);
+          actionsRow.appendChild(saveBtn);
+        }
 
         // Test Connection button
         const testBtn = el("button", { className: "btn btn-secondary" }, "Test Connection");
@@ -4137,7 +4155,7 @@ const OptimusPy = (function () {
           testBtn.disabled = true;
           testBtn.textContent = "Testing...";
           try {
-            const pw = pwInput.value || state.password || null;
+            const pw = (pwInput && pwInput.value) || state.password || null;
             const resp = await Api.connect(instanceName, pw);
             Toast.success(`Connected to ${resp.server_name} (${resp.cube_count} cubes)`);
           } catch (err) {
@@ -4149,22 +4167,24 @@ const OptimusPy = (function () {
         });
         actionsRow.appendChild(testBtn);
 
-        // Delete Instance button
-        const deleteBtn = el("button", { className: "btn btn-danger" }, "Delete Instance");
-        deleteBtn.addEventListener("click", () => {
-          Modal.confirm(`Delete instance "${instanceName}" from config.ini? This cannot be undone.`, async () => {
-            try {
-              await Api.deleteInstance(instanceName);
-              Toast.success(`Instance "${instanceName}" deleted`);
-              // Reload instances and re-render settings
-              await Sidebar.loadInstances();
-              this.mount();
-            } catch (err) {
-              Toast.error(err.message);
-            }
+        if (!ro) {
+          // Delete Instance button
+          const deleteBtn = el("button", { className: "btn btn-danger" }, "Delete Instance");
+          deleteBtn.addEventListener("click", () => {
+            Modal.confirm(`Delete instance "${instanceName}" from config.ini? This cannot be undone.`, async () => {
+              try {
+                await Api.deleteInstance(instanceName);
+                Toast.success(`Instance "${instanceName}" deleted`);
+                // Reload instances and re-render settings
+                await Sidebar.loadInstances();
+                this.mount();
+              } catch (err) {
+                Toast.error(err.message);
+              }
+            });
           });
-        });
-        actionsRow.appendChild(deleteBtn);
+          actionsRow.appendChild(deleteBtn);
+        }
 
         container.appendChild(actionsRow);
       } catch (err) {
