@@ -12,6 +12,7 @@ from optimuspy.core import (
     load_cube_config,
     validate_cube_config,
     main as run_optimize,
+    resolve_config_path,
     set_current_directory,
     _execute_scan_mode,
 )
@@ -70,7 +71,7 @@ def main():
                              "'scan' discovers optimization candidates")
     parser.add_argument('cube_config', nargs='?', default=None,
                         help="Path to cube JSON configuration file (required for optimize/set)")
-    parser.add_argument('--config', dest='config_ini', default='config/config.ini',
+    parser.add_argument('--config', dest='config_ini', default=None,
                         help="Path to TM1 connection config.ini (default: config/config.ini)")
     parser.add_argument('-p', '--password', dest='password', default=None,
                         help="TM1 password (overrides config.ini)")
@@ -89,13 +90,19 @@ def main():
 
     cmd_args = parser.parse_args()
 
+    try:
+        config_location = resolve_config_path(cmd_args.config_ini)
+    except FileNotFoundError as e:
+        print(f"ERROR: config.ini not found: {e}")
+        sys.exit(1)
+
     if cmd_args.mode == 'scan':
         if not cmd_args.instance:
             parser.error("scan mode requires --instance")
 
         logging.info(f"Starting OptimusPy v2.0. Mode: scan, Instance: {cmd_args.instance}")
 
-        config = get_tm1_config(cmd_args.config_ini)
+        config = get_tm1_config(config_location.path)
         tm1_args = dict(config[cmd_args.instance])
         tm1_args['session_context'] = APP_NAME
         if cmd_args.password:
@@ -117,7 +124,7 @@ def main():
         success = run_optimize(
             mode=cmd_args.mode,
             cube_config=cube_config,
-            config_ini_path=cmd_args.config_ini,
+            config_ini_path=config_location.path,
             password=cmd_args.password,
             no_resume=cmd_args.no_resume,
             tm1_checkpoint=cmd_args.tm1_checkpoint)
