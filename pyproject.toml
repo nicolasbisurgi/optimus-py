@@ -38,7 +38,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pyinstaller>=5.0.0",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [project.urls]
 Repository = "https://github.com/cubewise-code/optimus-py"

@@ -8,7 +8,7 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import List
+from typing import List, NamedTuple, Optional
 
 from TM1py import TM1Service
 from mdxpy import MdxBuilder, Member, MdxHierarchySet
@@ -26,6 +26,7 @@ TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 LOGFILE = APP_NAME + ".log"
 RESULT_PATH = Path("results/")
 RESULT_FILENAME = "{}_{}_{}"  # instance, cube_name, timestamp
+DEFAULT_CONFIG_INI = "config/config.ini"
 
 
 def set_current_directory():
@@ -79,6 +80,26 @@ def get_tm1_config(config_ini_path: str):
     config = configparser.ConfigParser()
     config.read(config_ini_path, encoding="utf-8")
     return config
+
+
+class ConfigLocation(NamedTuple):
+    path: str
+    read_only: bool
+
+
+def resolve_config_path(cli_path: Optional[str]) -> ConfigLocation:
+    """Resolve the config.ini path and whether it must be treated as read-only.
+
+    A path supplied explicitly via --config is assumed to be owned by another tool
+    (shared credentials) and is therefore read-only. The built-in default is OptimusPy's
+    own file and remains writable. Existence is checked only for an explicit path
+    (fail-fast); the default is left to the existing read path.
+    """
+    if cli_path is None:
+        return ConfigLocation(DEFAULT_CONFIG_INI, read_only=False)
+    if not os.path.isfile(cli_path):
+        raise FileNotFoundError(cli_path)
+    return ConfigLocation(cli_path, read_only=True)
 
 
 def load_cube_config(path: str) -> dict:
