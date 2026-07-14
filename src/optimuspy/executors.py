@@ -279,18 +279,6 @@ class MainExecutor(OptipyzerExecutor):
                     pass
         return False
 
-    def _check_swap_dim_with_str_to_last_position(
-            self, dimension_name: str, target_position: int
-    ) -> bool:
-        # if a dimension has strings and target dimension is the last dimension in the cube - do not swap.
-        # rest API allows to swap a dim with string to the last position, but not out of the last position
-        last_target_position = target_position + 1 == self.cube_dim_number
-        if last_target_position and self._has_string_elements(dimension_name):
-            logging.info(
-                f"Skip swapping dimension '{dimension_name}' into last position because it has string elements")
-            return True
-        return False
-
     def _string_last_skip(self, dim, target_position):
         """Skip swapping a string-bearing dim into the last position (forced order)."""
         last = target_position + 1 == self.cube_dim_number
@@ -367,6 +355,101 @@ class MainExecutor(OptipyzerExecutor):
                 placed_positions.append(target_position)
 
         return permutation_results
+
+    def _seed_order(self) -> List[str]:
+        """Cardinality-ascending seed with string/measure dims pinned last."""
+        non_string = [d for d in self.dimensions if d not in self.string_dims]
+        string_last = [d for d in self.dimensions if d in self.string_dims]
+        non_string.sort(key=lambda d: self.cardinality.get(d, 0))
+        # keep the measure dim last when it is only-numeric (not in string_dims)
+        if self.measure_dimension_only_numeric and self.dimensions[-1] in non_string:
+            non_string.remove(self.dimensions[-1])
+            non_string.append(self.dimensions[-1])
+        return non_string + string_last
+
+    def _run_fold_b(self, resume_state: dict = None) -> List[PermutationResult]:
+        has_views, has_processes = bool(self.view_names), bool(self.process_names)
+        if has_views:
+            tau_split = tau_span = tau.TAU_QUERY
+            ranking = "query"
+        elif has_processes:
+            tau_split, tau_span, ranking = tau.TAU_RAM, None, "process"
+        else:
+            tau_split = tau_span = tau.TAU_RAM
+            ranking = "ram"
+
+        resulting_order = self._seed_order()
+        permutation_results = []
+        last = len(resulting_order) - 1
+        pinned_last = self.dimensions[-1] if not self.measure_dimension_only_numeric else None
+
+        start_pass = 0
+        executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "fold_b_state" in executor_state:
+            fs = executor_state["fold_b_state"]
+            resulting_order = fs["current_order"]
+            start_pass = fs["pass_index"]
+            logging.info(f"Resuming Fold B from pass {start_pass}")
+        else:
+            # seed apply (one reorder) — the anchor of the % chain for this fold
+            seed_result = self._evaluate_permutation(resulting_order, total_permutations=None)
+            permutation_results.append(seed_result)
+
+        for pass_index in range(start_pass, tau.FOLD_B_MAX_PASSES):
+            improved = False
+            ordered = [(d, self.cardinality.get(d, 0)) for d in resulting_order]
+            refine = [d for d in tau.fold_b_refine_order(ordered, tau_split)
+                      if d != pinned_last and d in self.dimensions]
+            for dim in refine:
+                current_idx = resulting_order.index(dim)
+                lo, hi = tau.fold_b_allowed_span(
+                    dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], tau_span)
+                positions = [p for p in range(lo, hi + 1)
+                             if p != current_idx
+                             and not (p == last and dim in self.string_dims)]
+                if not positions:
+                    continue
+
+                def checkpoint_cb(position, results, _p=pass_index):
+                    self._save_checkpoint(
+                        new_results=permutation_results + results,
+                        last_applied_order=list(results[-1].dimension_order),
+                        executor_state={"fold_b_state": {
+                            "seed_order": self._seed_order(),
+                            "current_order": list(resulting_order),
+                            "pass_index": _p,
+                        }})
+
+                results = self._sweep_across_positions(
+                    resulting_order, dim, positions, total_permutations=len(positions),
+                    skip_permutation=self._greedy_skip_permutation,
+                    checkpoint_cb=checkpoint_cb)
+                permutation_results.extend(results)
+                if results:
+                    best = self._pick_best(results, ranking)
+                    metric = {"query": best.composite_query_time,
+                              "process": best.composite_process_time}.get(ranking)
+                    best_val = metric() if metric else best.ram_usage
+                    # accept only a strict improvement over the current placement
+                    current_val = self._current_metric(resulting_order, ranking, permutation_results)
+                    if best_val < current_val:
+                        resulting_order = list(best.dimension_order)
+                        improved = True
+            if not improved:
+                break
+
+        return permutation_results
+
+    def _current_metric(self, order, ranking, results):
+        """Metric value of the most recent result whose order == order (fallback: worst)."""
+        for r in reversed(results):
+            if list(r.dimension_order) == list(order):
+                if ranking == "query":
+                    return r.composite_query_time()
+                if ranking == "process":
+                    return r.composite_process_time()
+                return r.ram_usage
+        return float("inf")
 
 
 class PredefinedOrderExecutor(OptipyzerExecutor):
