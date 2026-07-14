@@ -13,6 +13,7 @@ from typing import List, NamedTuple, Optional
 from TM1py import TM1Service
 from mdxpy import MdxBuilder, Member, MdxHierarchySet
 
+from optimuspy import tau
 from optimuspy.checkpoint import CheckpointManager
 from optimuspy.executors import (OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor,
                                  PositionOptimizerExecutor, DimensionOptimizerExecutor,
@@ -350,7 +351,10 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
     optimus_result = None
 
     # Checkpoint setup
-    config_fingerprint = CheckpointManager.compute_config_fingerprint(cube_config) if cube_config else ""
+    config_fingerprint = CheckpointManager.compute_config_fingerprint(
+        cube_config,
+        extra={"tau_ram": tau.TAU_RAM, "tau_query": tau.TAU_QUERY,
+               "fold_b_max_passes": tau.FOLD_B_MAX_PASSES}) if cube_config else ""
     checkpoint_mgr = CheckpointManager(
         cube_name, instance_name, config_fingerprint, RESULT_PATH,
         tm1=tm1 if tm1_checkpoint else None)
