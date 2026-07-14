@@ -492,10 +492,8 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
             dim for dim in current_order
             if dim != current_order[self.target_position] and dim not in self.dimensions_to_exclude
         ]
-        # last-position + string dims are not legal candidates for the last slot
-        eligible = [d for d in candidates
-                    if not (is_last and self._has_string_elements(d))]
-        total = len(eligible)
+        # cosmetic upper bound for progress labels only — no API calls here
+        total = len([d for d in candidates if d not in completed_dimensions])
 
         def skip_candidate(dim, target_position):
             if dim in completed_dimensions:

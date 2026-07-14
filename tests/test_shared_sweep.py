@@ -168,3 +168,68 @@ def test_position_optimizer_sweeps_all_other_dims(scripted):
     results = ex.execute()
     # position 0 currently holds A; candidates are B and C swapped into slot 0
     assert [r.dimension_order[0] for r in results] == ["B", "C"]
+
+
+def test_position_optimizer_resume_never_requeries_completed_dims(scripted):
+    # "A" is already completed from a prior checkpoint. On resume, the executor
+    # must never call _has_string_elements("A") — completed dims are skipped
+    # BEFORE the string check, exactly like the pre-refactor code did.
+    ex = _make_position_optimizer(3, ["A", "B", "C", "D"])  # last position (index 3)
+    string_calls = []
+
+    def has_string_elements(name):
+        string_calls.append(name)
+        return False
+
+    ex._has_string_elements = has_string_elements
+
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+
+    resume_state = {"executor_state": {"position_state": {"completed_dimensions": ["A"]}}}
+    results = ex.execute(resume_state)
+
+    # "A" was already completed: it must never appear as a swept-in candidate.
+    assert "A" not in [r.dimension_order[3] for r in results]
+    assert "A" not in [o[3] for o in log]
+    # "A" must never have been queried for string elements — it's completed,
+    # so skip_candidate short-circuits before reaching the string check.
+    assert "A" not in string_calls
+    # The non-completed candidates (B, C) were genuinely swept.
+    assert {r.dimension_order[3] for r in results} == {"B", "C"}
+    # _has_string_elements called at most once per non-completed candidate (B, C).
+    assert len(string_calls) <= 2
+
+
+def test_position_optimizer_skips_string_candidate_at_last_position(scripted):
+    # target_position is the last index; "B" has string elements and must never
+    # be swept into the last slot. Non-string candidates must still be swept,
+    # and _has_string_elements must be called at most once per non-completed
+    # candidate (never twice for the same dim, never for completed dims).
+    ex = _make_position_optimizer(3, ["A", "B", "C", "D"])  # last position (index 3)
+    string_calls = []
+
+    def has_string_elements(name):
+        string_calls.append(name)
+        return name == "B"
+
+    ex._has_string_elements = has_string_elements
+
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+
+    results = ex.execute()
+
+    # "B" has strings and target position is last: it must never appear there.
+    assert "B" not in [r.dimension_order[3] for r in results]
+    assert "B" not in [o[3] for o in log]
+    # Non-string candidates (A, C) were genuinely swept into the last slot.
+    assert {r.dimension_order[3] for r in results} == {"A", "C"}
+    # Candidates considered: A, B, C (D is the incumbent at position 3, excluded).
+    non_completed_candidate_count = 3
+    assert len(string_calls) <= non_completed_candidate_count
+    # No candidate was queried more than once.
+    from collections import Counter
+    assert all(count == 1 for count in Counter(string_calls).values())
