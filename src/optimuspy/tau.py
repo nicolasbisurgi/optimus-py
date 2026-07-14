@@ -11,7 +11,7 @@ later) iff cardinality(X) / cardinality(Y) >= τ. It is a strict partial order
 cycle. Pinning and the confidence gate are emergent degenerate cases, not
 special-cased here.
 """
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 # Initial tunable ratios — validated against samples/, not user-exposed. None final.
 TAU_RAM = 4.0     # decides an ordering at RAM-ranked positions (full strength)
@@ -50,3 +50,48 @@ def front_frontier(unplaced: List[Tuple[str, int]], tau: float) -> List[str]:
         return []
     minimum = min(card for _, card in unplaced)
     return [name for name, card in unplaced if not decides_after(card, minimum, tau)]
+
+
+def ranking_for_position(target_position: int, mid: int,
+                         has_views: bool, has_processes: bool) -> str:
+    """Which metric ranks a position: 'ram' | 'query' | 'process'.
+
+    Mirrors MainExecutor's best-of selection (executors.py:350-365): the back
+    half (target_position > mid) is always RAM-ranked; the front half is
+    query-ranked when views are set, else process-ranked when processes are set,
+    else RAM.
+    """
+    if target_position > mid:
+        return "ram"
+    if has_views:
+        return "query"
+    if has_processes:
+        return "process"
+    return "ram"
+
+
+def tau_for_position(ranking: str, tau_ram: float = TAU_RAM,
+                     tau_query: float = TAU_QUERY) -> Optional[float]:
+    """The τ used to prune a position, or None when the position must not be pruned.
+
+    RAM-ranked -> full strength; query-ranked -> looser; process-ranked -> None
+    (cardinality cannot predict process time; search in full). See docs/adr/0002.
+    """
+    if ranking == "ram":
+        return tau_ram
+    if ranking == "query":
+        return tau_query
+    return None
+
+
+def fold_a_candidates(unplaced: List[Tuple[str, int]], is_back: bool,
+                      tau: Optional[float]) -> List[str]:
+    """Candidate dims to test at the current open position.
+
+    tau is None (process-ranked front) -> no pruning: every unplaced dim, in
+    order. Otherwise the τ-frontier: back_frontier for a back position, else
+    front_frontier.
+    """
+    if tau is None:
+        return [name for name, _ in unplaced]
+    return back_frontier(unplaced, tau) if is_back else front_frontier(unplaced, tau)

@@ -44,3 +44,35 @@ def test_frontiers_preserve_input_order():
     unplaced = [("Z", 100), ("Y", 120), ("X", 110)]
     assert tau.back_frontier(unplaced, 4.0) == ["Z", "Y", "X"]
     assert tau.front_frontier(unplaced, 4.0) == ["Z", "Y", "X"]
+
+
+def test_ranking_back_half_is_always_ram():
+    # mid=3; positions 4,5,6 are back -> ram regardless of views/processes.
+    assert tau.ranking_for_position(4, 3, has_views=True, has_processes=True) == "ram"
+
+
+def test_ranking_front_half_prefers_query_then_process_then_ram():
+    assert tau.ranking_for_position(1, 3, has_views=True, has_processes=True) == "query"
+    assert tau.ranking_for_position(1, 3, has_views=False, has_processes=True) == "process"
+    assert tau.ranking_for_position(1, 3, has_views=False, has_processes=False) == "ram"
+
+
+def test_tau_for_position_keys_to_metric():
+    assert tau.tau_for_position("ram") == tau.TAU_RAM
+    assert tau.tau_for_position("query") == tau.TAU_QUERY
+    assert tau.tau_for_position("process") is None  # never prune process positions
+
+
+def test_fold_a_candidates_back_uses_back_frontier():
+    unplaced = [("A", 180), ("B", 205), ("C", 50000)]
+    assert tau.fold_a_candidates(unplaced, is_back=True, tau=4.0) == ["C"]
+
+
+def test_fold_a_candidates_front_uses_front_frontier():
+    unplaced = [("A", 180), ("B", 205), ("C", 50000)]
+    assert tau.fold_a_candidates(unplaced, is_back=False, tau=4.0) == ["A", "B"]
+
+
+def test_fold_a_candidates_none_tau_returns_all_unplaced_in_order():
+    unplaced = [("A", 180), ("B", 205), ("C", 50000)]
+    assert tau.fold_a_candidates(unplaced, is_back=False, tau=None) == ["A", "B", "C"]
