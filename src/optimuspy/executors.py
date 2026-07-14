@@ -166,6 +166,57 @@ class OptipyzerExecutor:
             completed_results=all_completed,
             executor_state=executor_state)
 
+    def _sweep_into_position(self, current_order, target_position, candidate_dims,
+                             total_permutations, skip_candidate=None,
+                             skip_permutation=None, checkpoint_cb=None):
+        """P1 primitive: swap each candidate dim into target_position, evaluate.
+
+        Returns the PermutationResult for each candidate that was actually tested.
+        Shared by PositionOptimizerExecutor (all candidates) and Fold A (τ-frontier).
+        """
+        results = []
+        for dim in candidate_dims:
+            if skip_candidate and skip_candidate(dim, target_position):
+                continue
+            permutation = swap(current_order, target_position, current_order.index(dim))
+            if skip_permutation and skip_permutation(permutation):
+                continue
+            self._check_cancelled()
+            result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
+            results.append(result)
+            if checkpoint_cb:
+                checkpoint_cb(dim, results)
+        return results
+
+    def _sweep_across_positions(self, current_order, target_dim, candidate_positions,
+                                total_permutations, skip_permutation=None,
+                                checkpoint_cb=None):
+        """P2 primitive: move target_dim into each candidate position, evaluate.
+
+        Shared by DimensionOptimizerExecutor (all positions) and Fold B (τ span).
+        """
+        results = []
+        for position in candidate_positions:
+            permutation = swap(current_order, position, current_order.index(target_dim))
+            if skip_permutation and skip_permutation(permutation):
+                continue
+            self._check_cancelled()
+            result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
+            results.append(result)
+            if checkpoint_cb:
+                checkpoint_cb(position, results)
+        return results
+
+    def _pick_best(self, results, ranking):
+        """Return the best result by the position's ranking metric (ascending)."""
+        if ranking == "query":
+            key = lambda r: r.composite_query_time()
+        elif ranking == "process":
+            key = lambda r: r.composite_process_time()
+        else:
+            key = lambda r: r.ram_usage
+        return sorted(results, key=key)[0]
+
 
 class OriginalOrderExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
