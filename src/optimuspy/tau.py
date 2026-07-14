@@ -95,3 +95,51 @@ def fold_a_candidates(unplaced: List[Tuple[str, int]], is_back: bool,
     if tau is None:
         return [name for name, _ in unplaced]
     return back_frontier(unplaced, tau) if is_back else front_frontier(unplaced, tau)
+
+
+def _card_of(dim: str, ordered: List[Tuple[str, int]]) -> int:
+    for name, card in ordered:
+        if name == dim:
+            return card
+    raise KeyError(dim)
+
+
+def fold_b_refine_order(ordered: List[Tuple[str, int]], tau: float) -> List[str]:
+    """Undecided dims to refine in Fold B, in refinement order.
+
+    A dim is undecided if at least one *other* dim is within τ of it (neither
+    dominates nor is dominated). Decided/pinned dims (clearly separated from every
+    neighbour) are excluded — the seed already places them correctly. Ordered by
+    descending cardinality (a larger dim's placement moves RAM more), input order
+    as the tiebreak.
+    """
+    undecided = []
+    for i, (name, card) in enumerate(ordered):
+        within_tau_neighbour = any(
+            not decides_after(card, other, tau) and not decides_after(other, card, tau)
+            for j, (other_name, other) in enumerate(ordered) if j != i
+        )
+        if within_tau_neighbour:
+            undecided.append((i, name, card))
+    undecided.sort(key=lambda t: (-t[2], t[0]))  # -cardinality, then seed index
+    return [name for _, name, _ in undecided]
+
+
+def fold_b_allowed_span(dim: str, ordered: List[Tuple[str, int]],
+                        tau: Optional[float]) -> Tuple[int, int]:
+    """Inclusive (lo, hi) position range dim may occupy under τ.
+
+    tau is None -> every position. Otherwise lo = number of dims dim dominates
+    (they must precede it), hi = last index minus the number of dims that dominate
+    dim (they must follow it). The contiguous span between what it dominates and
+    what dominates it.
+    """
+    n = len(ordered)
+    if tau is None:
+        return (0, n - 1)
+    card = _card_of(dim, ordered)
+    must_precede = sum(1 for name, other in ordered
+                       if name != dim and decides_after(card, other, tau))
+    must_follow = sum(1 for name, other in ordered
+                      if name != dim and decides_after(other, card, tau))
+    return (must_precede, (n - 1) - must_follow)
