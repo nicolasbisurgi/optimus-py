@@ -24,25 +24,39 @@ OptimusPy benchmarks dimension orders by physically reordering the cube on the T
 
 Steps 2 and 7 are wrapped in a `try/finally` — even if the job fails or is cancelled, VMM/VMT and the original order are always restored.
 
-## The greedy outside-in algorithm
+## The cardinality-aware greedy (two folds)
 
-For an N-dimension cube, the algorithm walks position indices in the sequence:
+OptimusPy compares each dimension's **cardinality** (leaf-element count — a
+cheap, reorder-free signal) using a **leaf-count tolerance ratio (τ)**. When one
+dimension's cardinality is at least τ× another's, leaf-count theory *decides*
+their order (larger ⇒ sparser ⇒ later) and the reverse is never tested. When two
+dimensions are within τ, the pair is *undecided* and both orderings are measured —
+density, which OptimusPy cannot know in advance, picks the winner.
 
-```
-N-1, 0, N-2, 1, N-3, 2, ..., (stops at the middle)
-```
+τ is **keyed to the ranking metric** (see ADR-0002): full strength at RAM-ranked
+positions, looser at query-ranked front positions, and switched off at
+process-ranked front positions (cardinality cannot predict process time).
+**Adding a view unlocks front-half pruning** — it is the user-facing lever for
+making a slow process-only cube fast.
 
-For each target position, it tries swapping every remaining dimension into that slot, measures, and locks the winner. This produces approximately `N × (N-1)` evaluations vs. `N!` for full enumeration:
+Two folds, selected by the `fast` flag:
 
-| Dims | Full enumeration | Greedy iterations |
-|---|---|---|
-| 5 | 120 | 20 |
-| 6 | 720 | 30 |
-| 7 | 5,040 | 42 |
-| 8 | 40,320 | 56 |
-| 10 | 3,628,800 | 90 |
+- **Thorough (`fast: false`, default)** walks position indices `N-1, 0, N-2,
+  1, …` outside-in. At each position it tests only the **τ-frontier** of the
+  unplaced dimensions (those within τ of the position's extreme cardinality),
+  locks the measured winner, and continues. A dimension that dominates every
+  other by ≫ τ (e.g. a 50,000-leaf dimension) is the sole candidate for the
+  back-most slot — it is *pinned* there in a single reorder and never tested
+  elsewhere.
+- **Fast (`fast: true`)** seeds from the cardinality-suggested order (ascending
+  cardinality, string/measure dims last), applies it in one reorder, then runs
+  **coordinate-descent** refinement: each *undecided* dimension is swept across
+  only its τ-allowed positions, largest dimensions first, for at most two passes
+  (stopping early once a pass improves nothing).
 
-The greedy converges to a near-optimal order in a fraction of the time. It can miss the global optimum in rare interaction cases, which is why [Predefined Orders](../modes/predefined-orders.md) exists for hand-tuned A/B testing.
+If every dimension is within τ of the next, nothing is decided and the thorough
+fold degrades gracefully to a full outside-in search — uniform cubes are
+unaffected by construction.
 
 ## Composite metrics
 

@@ -18,6 +18,8 @@ For each position, it tries swapping every remaining dimension into that slot an
 
 This converges in roughly `N × (N-1)` evaluations rather than `N!`, which is the difference between minutes and millennia for a typical 8-dimension cube.
 
+Set **`fast: true`** for the seed-and-refine fold (see [How It Works](../concepts/how-it-works.md)).
+
 [Full algorithm walkthrough → How It Works](../concepts/how-it-works.md)
 
 ## JSON config example
