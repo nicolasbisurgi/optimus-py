@@ -1889,7 +1889,7 @@ const OptimusPy = (function () {
       howTo.appendChild(el("div", { style: "margin-top:14px;padding-top:14px;border-top:1px solid var(--border-secondary)" }));
       howTo.appendChild(el("div", { style: "font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px" }, "Optimization Modes"));
       const modes = [
-        { badge: "Greedy", color: "var(--accent)", desc: "Outside-in algorithm. Tests each dimension for first and last position, then works inward. Best general-purpose approach." },
+        { badge: "Greedy", color: "var(--accent)", desc: "Cardinality-aware outside-in search: uses leaf-count tolerance (τ) to test only the orderings measurement must decide and pins clearly-placed dimensions. Toggle Fast mode for the seed-and-refine fold. Best general-purpose approach." },
         { badge: "Predefined", color: "var(--warning)", desc: "Benchmarks specific dimension orders you define. Use when you have candidate orders from manual analysis." },
         { badge: "Position", color: "var(--success)", desc: "Tests all dimensions for a single position (e.g., find the best last dimension). Quick, targeted optimization." },
         { badge: "Dimension", color: "var(--error)", desc: "Tests all positions for a single dimension. Useful when you know which dimension to focus on." },

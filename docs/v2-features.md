@@ -197,7 +197,7 @@ optimuspy scan --instance tm1srv01       # Discover optimization candidates
 | `output` | string | Yes | Output format: `"csv"` or `"xlsx"` |
 | `processes` | list | No | TI process names to benchmark (supports multiple) |
 | `update` | bool | No | Apply the best order to the cube automatically |
-| `fast` | bool | No | Fast mode: test only first and last positions |
+| `fast` | bool | No | Fast fold: seed from the cardinality-suggested order, then coordinate-descent refine only the τ-undecided dimensions (≤2 passes). `false` runs the thorough τ-frontier search |
 | `predefined_orders` | list | No | Test only these specific dimension orders |
 | `orders_to_ignore` | list | No | Skip these dimension orders during greedy algorithm |
 | `dimensions_to_exclude` | list | No | Keep these dimensions fixed during optimization |
@@ -286,7 +286,7 @@ The blob is named `optimuspy_checkpoint_{cube}.json` and uses the same TM1 conne
 | Benchmarking | Yes | Yes | Yes | Yes | — | — |
 | Multi-view (optional) | Yes | Yes | Yes | Yes | — | — |
 | Multi-process (optional) | Yes | Yes | Yes | Yes | — | — |
-| Fast mode | Yes | — | — | — | — | — |
+| Fast fold (`fast`) | Yes | — | — | — | — | — |
 | dimensions_to_exclude | Yes | — | Yes | — | — | — |
 | orders_to_ignore | Yes | — | — | — | — | — |
 | Checkpoint/Resume | Yes | Yes | Yes | Yes | — | — |
