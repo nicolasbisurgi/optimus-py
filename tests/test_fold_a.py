@@ -82,23 +82,43 @@ def test_fold_a_measures_near_tied_cluster_in_full(scripted):
 
 
 def test_fold_a_query_front_uses_looser_tau(scripted):
-    # With views, a front (query-ranked) position prunes with tau_query (10x), not
-    # tau_ram (4x). Sm/Md sit at a 6x ratio: decided under tau_ram, undecided under
-    # tau_query. F1 and F2 are back-dominant fillers and M is tiny (front-dominant)
-    # padding, so Sm and Md only get compared against EACH OTHER once they reach a
-    # front position — the outside-in walk resolves F1 (back), M (front), and F2
-    # (back) first, since a walk always visits the back position before the paired
-    # front position at each round, so a 2-dim (Sm, Md, M-only) setup could never
-    # let Sm and Md coexist as front candidates: the back visit resolves them first.
-    dims = ["Sm", "Md", "F1", "F2", "M"]
-    card = {"Sm": 50, "Md": 300, "F1": 5_000_000, "F2": 2000, "M": 3}
+    # With a view, front (query-ranked) positions prune with tau_query (10x), not
+    # tau_ram (4x). dims = [A, B, C, M], card = {A:10, B:18, C:5000, M:3}; mid=2.
+    # The walk visits back position 3 (RAM-ranked) then front position 0
+    # (query-ranked), then breaks at mid. At position 3, C (5000) dominates
+    # everything else by >>4x -> back_frontier is just [C], so C is pinned to the
+    # back-most slot. At position 0, the remaining pool is {A:10, B:18, M:3}:
+    # front_frontier under tau_query=10 keeps all three (B/M = 18/3 = 6 < 10), but
+    # under tau_ram=4 it would exclude B (6 >= 4). So B reaching the front sweep
+    # at all is only possible under tau_query.
+    dims = ["A", "B", "C", "M"]
+    card = {"A": 10, "B": 18, "C": 5000, "M": 3}
     ex = make_main_executor(dims, card, view_names=["V"])
     log = []
-    scripted(ex, lambda o: 100.0, log, query_of=lambda o: 1.0 + o.index("Sm") * 0.01)
+    scripted(ex, lambda o: 100.0, log, query_of=lambda o: 1.0 + o.index("A") * 0.01)
     ex.context.set_initial_ram(100.0)
     ex._run_fold_a()
-    # By the last front (query-ranked, target_position=1) position, only Sm and Md
-    # remain unplaced; tau_query (10x > 6x) keeps both as candidates instead of
-    # deciding on Md alone the way tau_ram would.
-    front_candidates = {o[1] for o in log[-2:]}
-    assert front_candidates == {"Sm", "Md"}
+    # B is swapped into the front position (index 0) only when tau_query (not
+    # tau_ram) keeps it as a candidate at that position.
+    assert any(o[0] == "B" for o in log)
+    # The back position was pinned to the dominant dim C.
+    assert any(o[3] == "C" for o in log)
+
+
+def test_fold_a_process_front_not_pruned(scripted):
+    # Process-ranked front positions must NOT be tau-pruned: tau_for_position
+    # returns None for "process" (cardinality cannot predict process time), so
+    # fold_a_candidates returns every unplaced dim regardless of tau.
+    dims = ["A", "B", "C", "M"]
+    card = {"A": 10, "B": 100, "C": 5000, "M": 3}
+    ex = make_main_executor(dims, card, process_names=["P"])
+    log = []
+    scripted(ex, lambda o: 100.0, log)
+    ex.context.set_initial_ram(100.0)
+    ex._run_fold_a()
+    # B (100/3 ~= 33x M) would be excluded from a RAM-ranked front frontier at
+    # tau_ram=4, yet reaches the process-ranked front position (index 0),
+    # proving candidate selection there is unpruned.
+    assert any(o[0] == "B" for o in log)
+    # The back position is still pinned to the dominant dim C.
+    assert any(o[3] == "C" for o in log)

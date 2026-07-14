@@ -343,7 +343,7 @@ class MainExecutor(OptipyzerExecutor):
             is_back = target_position > mid
             candidates = tau.fold_a_candidates(unplaced, is_back, tau_val)
 
-            def checkpoint_cb(dim, results, _tp=target_position, _pp=list(placed_positions)):
+            def checkpoint_cb(dim, results, _pp=list(placed_positions)):
                 self._save_checkpoint(
                     new_results=permutation_results + results,
                     last_applied_order=list(results[-1].dimension_order),
