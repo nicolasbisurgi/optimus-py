@@ -246,7 +246,8 @@ class MainExecutor(OptipyzerExecutor):
                  dimensions_to_exclude: List[str] = None,
                  orders_to_ignore: List[List[str]] = None,
                  checkpoint_manager=None, process_parameters: dict = None,
-                 dimension_position_rules: list = None, cancel_event=None, is_v12: bool = False):
+                 dimension_position_rules: list = None, cancel_event=None, is_v12: bool = False,
+                 cardinality: Dict[str, int] = None, string_dims: List[str] = None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
@@ -255,6 +256,8 @@ class MainExecutor(OptipyzerExecutor):
         self.dimensions_to_exclude = dimensions_to_exclude or []
         self.orders_to_ignore = orders_to_ignore or []
         self.dimension_position_rules = dimension_position_rules or []
+        self.cardinality = cardinality or {}
+        self.string_dims = set(string_dims or [])
 
     def _violates_position_rules(self, permutation: List[str]) -> bool:
         for rule in self.dimension_position_rules:

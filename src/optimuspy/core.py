@@ -345,6 +345,10 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
     displayed_dimension_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
     measure_dimension_only_numeric = is_dimension_only_numeric(tm1, initial_dimension_order[-1])
 
+    dimensions_metadata = _collect_dimension_metadata(tm1, displayed_dimension_order)
+    cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}
+    string_dims = [d["name"] for d in dimensions_metadata if d["has_strings"]]
+
     context = ExecutionContext()
     permutation_results = []
     optimus_result = None
@@ -441,7 +445,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                     measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     dimension_position_rules=dimension_position_rules, cancel_event=cancel_event,
-                    is_v12=is_v12)
+                    is_v12=is_v12, cardinality=cardinality, string_dims=string_dims)
 
             # Set resume context on executor
             executor.set_resume_context(initial_dimension_order, original_order_result, resumed_results)
