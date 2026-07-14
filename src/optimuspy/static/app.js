@@ -2859,7 +2859,10 @@ const OptimusPy = (function () {
       const fastLabel = el("label", { className: "checkbox-label" });
       const fastCb = el("input", { type: "checkbox" });
       fastLabel.appendChild(fastCb);
-      fastLabel.appendChild(document.createTextNode("Fast mode"));
+      fastLabel.appendChild(document.createTextNode("Fast mode (seed & refine)"));
+      fastLabel.title = "Seed from the cardinality-suggested order, then refine only " +
+        "the dimensions leaf-count theory leaves ambiguous. Faster than a full search; " +
+        "unchecked runs the thorough search.";
       toggleRow.appendChild(fastLabel);
 
       const autoApplyLabel = el("label", { className: "checkbox-label" });
