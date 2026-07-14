@@ -138,3 +138,33 @@ def test_pick_best_ram(scripted):
     r1 = ex._evaluate_permutation(["A", "B"], is_original_order=True)
     r2 = ex._evaluate_permutation(["B", "A"])
     assert ex._pick_best([r1, r2], "ram").dimension_order == ["B", "A"]
+
+
+from optimuspy.executors import PositionOptimizerExecutor
+
+
+def _make_position_optimizer(target_position, dims, exclude=None):
+    ex = object.__new__(PositionOptimizerExecutor)
+    ex.context = ExecutionContext()
+    ex.mode = ExecutionMode.ITERATIONS
+    ex.cube_name, ex.view_names, ex.process_names = "C", [], []
+    ex.cancel_event = ex.checkpoint_manager = None
+    ex.dimensions = list(dims)
+    ex.target_position = target_position
+    ex.dimensions_to_exclude = exclude or []
+    ex._resumed_results = []
+    ex._original_order_result = None
+    ex._initial_dimension_order = None
+    # no string elements anywhere
+    ex._has_string_elements = lambda name: False
+    return ex
+
+
+def test_position_optimizer_sweeps_all_other_dims(scripted):
+    ex = _make_position_optimizer(0, ["A", "B", "C"])
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)  # strictly decreasing, deterministic
+    ex.context.set_initial_ram(100.0)
+    results = ex.execute()
+    # position 0 currently holds A; candidates are B and C swapped into slot 0
+    assert [r.dimension_order[0] for r in results] == ["B", "C"]

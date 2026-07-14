@@ -481,7 +481,6 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
     def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         current_order = self.dimensions[:]
         is_last = (self.target_position == len(current_order) - 1)
-        results = []
 
         completed_dimensions = set()
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
@@ -493,33 +492,29 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
             dim for dim in current_order
             if dim != current_order[self.target_position] and dim not in self.dimensions_to_exclude
         ]
+        # last-position + string dims are not legal candidates for the last slot
+        eligible = [d for d in candidates
+                    if not (is_last and self._has_string_elements(d))]
+        total = len(eligible)
 
-        total = len(candidates)
-        for dim in candidates:
+        def skip_candidate(dim, target_position):
             if dim in completed_dimensions:
-                continue
-
+                return True
             if is_last and self._has_string_elements(dim):
                 logging.info(f"Skip '{dim}' — has string elements, can't be last")
-                total -= 1
-                continue
+                return True
+            return False
 
-            self._check_cancelled()
-            orig_idx = current_order.index(dim)
-            permutation = swap(current_order, self.target_position, orig_idx)
-            result = self._evaluate_permutation(permutation, total_permutations=total)
-            results.append(result)
-
-            # Save checkpoint after each permutation
+        def checkpoint_cb(dim, results):
             completed_dimensions.add(dim)
             self._save_checkpoint(
                 new_results=results,
-                last_applied_order=list(permutation),
-                executor_state={
-                    "position_state": {"completed_dimensions": sorted(completed_dimensions)}
-                })
+                last_applied_order=list(results[-1].dimension_order),
+                executor_state={"position_state": {"completed_dimensions": sorted(completed_dimensions)}})
 
-        return results
+        return self._sweep_into_position(
+            current_order, self.target_position, candidates, total_permutations=total,
+            skip_candidate=skip_candidate, checkpoint_cb=checkpoint_cb)
 
 
 class DimensionOptimizerExecutor(OptipyzerExecutor):
