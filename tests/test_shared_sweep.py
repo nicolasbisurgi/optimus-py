@@ -68,7 +68,65 @@ def test_sweep_into_position_honours_skip_candidate(scripted):
     ex.context.set_initial_ram(100.0)
     ex._sweep_into_position(order, 3, ["A", "B", "C"], total_permutations=3,
                             skip_candidate=lambda dim, pos: dim == "B")
-    assert ["A", "B", "C", "M"] not in [o for o in log if o[3] == "B"]  # B never placed last
+    # B is skipped: it must never be the candidate swapped into target_position (index 3).
+    assert not any(o[3] == "B" for o in log)
+    # A and C are NOT skipped: they must genuinely have been swept into position 3.
+    assert {o[3] for o in log} == {"A", "C"}
+
+
+def test_sweep_across_positions_evaluates_each_position_by_swapping(scripted):
+    ex = _bare_executor()
+    order = ["A", "B", "C"]
+    log = []
+    scripted(ex, lambda o: 100.0, log)
+    ex.context.set_initial_ram(100.0)
+
+    results = ex._sweep_across_positions(order, target_dim="A", candidate_positions=[1, 2],
+                                         total_permutations=2)
+    assert [r.dimension_order.index("A") for r in results] == [1, 2]
+
+
+def test_sweep_into_position_honours_skip_permutation(scripted):
+    ex = _bare_executor()
+    order = ["A", "B", "C", "M"]
+    log = []
+    scripted(ex, lambda o: 100.0, log)
+    ex.context.set_initial_ram(100.0)
+
+    # Swapping C into position 1 yields this exact permutation; block it via skip_permutation.
+    blocked = ["A", "C", "B", "M"]
+    results = ex._sweep_into_position(order, target_position=1, candidate_dims=["B", "C"],
+                                      total_permutations=2,
+                                      skip_permutation=lambda perm: perm == blocked)
+
+    assert blocked not in log
+    assert all(r.dimension_order != blocked for r in results)
+    # The non-blocked candidate (B, a no-op swap here) was still evaluated.
+    assert ["A", "B", "C", "M"] in log
+
+
+def test_sweep_into_position_checkpoint_cb_sees_last_applied_order(scripted):
+    ex = _bare_executor()
+    order = ["A", "B", "C", "M"]
+    log = []
+    scripted(ex, lambda o: 100.0, log)
+    ex.context.set_initial_ram(100.0)
+
+    calls = []
+
+    def checkpoint_cb(dim, results):
+        calls.append((dim, list(results)))
+
+    ex._sweep_into_position(order, target_position=1, candidate_dims=["B", "C"],
+                            total_permutations=2, checkpoint_cb=checkpoint_cb)
+
+    # checkpoint_cb fires once per evaluated candidate, in order.
+    assert [dim for dim, _ in calls] == ["B", "C"]
+    assert len(calls) == len(log) == 2
+    # At each call, the last-applied order handed to the callback is exactly the
+    # permutation that was just evaluated (the cube "sits at" that order).
+    for i, (_, results) in enumerate(calls):
+        assert results[-1].dimension_order == log[i]
 
 
 def test_pick_best_ram(scripted):
