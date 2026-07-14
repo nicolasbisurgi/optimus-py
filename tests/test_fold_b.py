@@ -136,6 +136,48 @@ def test_fold_b_uses_looser_query_tau_when_views_present(scripted):
     assert len(log) > 1
 
 
+def test_fold_b_never_refines_string_dim_off_last(scripted):
+    # Review fix: refine must exclude ALL string-bearing dims (decided-by-rule,
+    # seeded last), not just the pinned measure. Before the fix, a non-measure
+    # string dim that happens to be "undecided" by cardinality (within tau of
+    # some other dim) stayed in refine. Since the seed always places string dims
+    # last, and the span->positions filter forbids a string dim's OWN sweep from
+    # landing back on the last index, refining it necessarily moves it off the
+    # last slot with no way back -- violating the hard string-last TM1 rule.
+    #
+    # "S" (card 120) is deliberately within tau of "D1" (card 100, 1.2x) so it is
+    # genuinely undecided -> a real trigger for the bug, not a decided/pinned dim
+    # that would be excluded anyway. "D2" (card 50000) dominates D1 by >>4x, which
+    # caps D1's own allowed span below the last index (index 3) -- so D1's sweep
+    # can never collaterally bump S off its seeded slot either, keeping the
+    # assertion clean.
+    dims = ["D1", "D2", "S", "M"]
+    card = {"D1": 100, "D2": 50000, "S": 120, "M": 3}
+    ex = make_main_executor(dims, card, fast=True, string_dims=["S"])
+    log = []
+    scripted(ex, lambda o: 100.0, log)  # ties everywhere -> nothing ever accepted
+    ex.context.set_initial_ram(100.0)
+
+    swept_dims = []
+    original_sweep = ex._sweep_across_positions
+
+    def spy_sweep(current_order, target_dim, candidate_positions, *args, **kwargs):
+        swept_dims.append(target_dim)
+        return original_sweep(current_order, target_dim, candidate_positions, *args, **kwargs)
+
+    ex._sweep_across_positions = spy_sweep
+
+    ex._run_fold_b()
+
+    # S is undecided (within tau of D1) yet must NEVER be the target dim a sweep
+    # repositions -- it is excluded from refine unconditionally as a string dim.
+    assert "S" not in swept_dims
+    # The genuinely undecided non-string dim (D1) was still refined normally.
+    assert "D1" in swept_dims
+    # S never leaves its seeded last slot in any evaluated order.
+    assert all(o[-1] == "S" for o in log)
+
+
 def test_fold_b_resume_skips_seed_and_completed_passes(scripted):
     # On resume, _run_fold_b must NOT re-apply the seed (that % was already
     # anchored before checkpointing) and must resume from the checkpointed

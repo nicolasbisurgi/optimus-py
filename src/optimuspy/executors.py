@@ -399,7 +399,7 @@ class MainExecutor(OptipyzerExecutor):
             improved = False
             ordered = [(d, self.cardinality.get(d, 0)) for d in resulting_order]
             refine = [d for d in tau.fold_b_refine_order(ordered, tau_split)
-                      if d != pinned_last and d in self.dimensions]
+                      if d != pinned_last and d not in self.string_dims]
             for dim in refine:
                 current_idx = resulting_order.index(dim)
                 lo, hi = tau.fold_b_allowed_span(
