@@ -441,8 +441,16 @@ class MainExecutor(OptipyzerExecutor):
         return permutation_results
 
     def _current_metric(self, order, ranking, results):
-        """Metric value of the most recent result whose order == order (fallback: worst)."""
-        for r in reversed(results):
+        """Metric value of the most recent result whose order == order (fallback: worst).
+
+        On resume the restored current_order was measured in the PRIOR run, so it
+        lives in self._resumed_results, not in this run's `results`. Search both
+        (resumed first as older, new results last) most-recent-first, so the
+        anchor's real metric is found instead of float('inf') — which would let
+        the first resumed sweep accept a regression. On a fresh run
+        _resumed_results is empty, so behaviour is identical.
+        """
+        for r in reversed(self._resumed_results + results):
             if list(r.dimension_order) == list(order):
                 if ranking == "query":
                     return r.composite_query_time()
