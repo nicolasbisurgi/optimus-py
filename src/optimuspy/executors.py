@@ -6,6 +6,7 @@ from typing import List, Dict
 
 from TM1py import TM1Service, Process
 
+from optimuspy import tau
 from optimuspy.execution_mode import ExecutionMode
 from optimuspy.metrics import read_cube_memory_bytes
 from optimuspy.results import ExecutionContext, PermutationResult
@@ -290,136 +291,80 @@ class MainExecutor(OptipyzerExecutor):
             return True
         return False
 
+    def _string_last_skip(self, dim, target_position):
+        """Skip swapping a string-bearing dim into the last position (forced order)."""
+        last = target_position + 1 == self.cube_dim_number
+        return last and dim in self.string_dims
+
+    def _greedy_skip_permutation(self, permutation):
+        if permutation in self.orders_to_ignore:
+            logging.debug(f"Skipping ignored order: {permutation}")
+            return True
+        if self._violates_position_rules(permutation):
+            logging.debug(f"Skipping order due to position rule violation: {permutation}")
+            return True
+        return False
+
     def execute(self, resume_state: dict = None) -> List[PermutationResult]:
+        if self.fast:
+            return self._run_fold_b(resume_state)
+        return self._run_fold_a(resume_state)
+
+    def _run_fold_a(self, resume_state: dict = None) -> List[PermutationResult]:
         dimensions = self.dimensions[:]
         resulting_order = self.dimensions[:]
         permutation_results = []
-        # dimensions that we're allowed to swap
-        dimension_pool = [
-            dim for dim in self.dimensions[:] if dim not in self.dimensions_to_exclude
-        ]
-
+        dimension_pool = [d for d in self.dimensions if d not in self.dimensions_to_exclude]
         mid = int(len(dimension_pool) / 2)
-
         if not self.measure_dimension_only_numeric:
             dimension_pool.remove(self.dimensions[-1])
             dimensions.remove(self.dimensions[-1])
+        total_permutations = sum(range(2, len(dimension_pool) + 1))
+        has_views, has_processes = bool(self.view_names), bool(self.process_names)
 
-        if self.fast:
-            total_permutations = len(dimension_pool) * 2 - 1
-        else:
-            total_permutations = sum(range(2, len(dimension_pool) + 1))
-
-        # Restore greedy algorithm state from checkpoint
-        resume_iteration = -1
-        resume_tested_dims = set()
-        resumed_result_ids = set()
+        placed_positions = []
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
-        if "greedy_state" in executor_state:
-            gs = executor_state["greedy_state"]
-            resulting_order = gs["resulting_order"]
-            dimension_pool = gs["dimension_pool"]
-            resume_iteration = gs["iteration"]
-            dimensions = gs["dimensions"]
-            resume_tested_dims = set(gs.get("tested_dims_in_current_round", []))
-            resumed_result_ids = set(gs.get("results_per_dimension_ids", []))
-            logging.info(f"Resuming greedy algorithm from iteration {resume_iteration}")
+        if "fold_a_state" in executor_state:
+            fs = executor_state["fold_a_state"]
+            resulting_order = fs["resulting_order"]
+            dimension_pool = fs["dimension_pool"]
+            placed_positions = fs["placed_positions"]
+            logging.info(f"Resuming Fold A — {len(placed_positions)} positions already locked")
 
-        # iteration through positions like: n, 0, n-1, 1, n-2, 2, ...
-        for iteration, target_position in enumerate(
-                chain(*zip(reversed(range(len(dimensions))), range(len(dimensions))))):
-            if self.fast and iteration == 2:
-                break
-
+        for target_position in chain(*zip(reversed(range(len(dimensions))), range(len(dimensions)))):
             if target_position == mid:
                 break
-
-            # Skip fully completed iterations
-            if iteration < resume_iteration:
+            if target_position in placed_positions:
                 continue
 
-            results_per_dimension = list()
+            unplaced = [(d, self.cardinality.get(d, 0)) for d in dimension_pool]
+            ranking = tau.ranking_for_position(target_position, mid, has_views, has_processes)
+            tau_val = tau.tau_for_position(ranking)
+            is_back = target_position > mid
+            candidates = tau.fold_a_candidates(unplaced, is_back, tau_val)
 
-            # Rebuild results_per_dimension from resumed results for current iteration
-            if iteration == resume_iteration and self._resumed_results:
-                results_per_dimension = [
-                    r for r in self._resumed_results if r.permutation_id in resumed_result_ids
-                ]
+            def checkpoint_cb(dim, results, _tp=target_position, _pp=list(placed_positions)):
+                self._save_checkpoint(
+                    new_results=permutation_results + results,
+                    last_applied_order=list(results[-1].dimension_order),
+                    executor_state={"fold_a_state": {
+                        "resulting_order": list(resulting_order),
+                        "dimension_pool": list(dimension_pool),
+                        "placed_positions": _pp,
+                    }})
 
-            # for the current position - swap all the allowed dimensions and append all possible orders to the result set
-            for dimension in dimension_pool:
-                # Skip dimensions already tested in this round (from checkpoint)
-                if iteration == resume_iteration and dimension in resume_tested_dims:
-                    continue
+            results = self._sweep_into_position(
+                resulting_order, target_position, candidates, total_permutations,
+                skip_candidate=self._string_last_skip,
+                skip_permutation=self._greedy_skip_permutation,
+                checkpoint_cb=checkpoint_cb)
+            permutation_results.extend(results)
 
-                original_position = resulting_order.index(dimension)
-                dimension_target = resulting_order[target_position]
-
-                if (not self._check_swap_dim_with_str_to_last_position(dimension, target_position)
-                        and dimension_target in dimension_pool):
-                    permutation = list(resulting_order)
-                    permutation = swap(permutation, target_position, original_position)
-
-                    # skip ignored orders
-                    if permutation in self.orders_to_ignore:
-                        logging.debug(f"Skipping ignored order: {permutation}")
-                        continue
-
-                    # skip orders violating position rules
-                    if self._violates_position_rules(permutation):
-                        logging.debug(f"Skipping order due to position rule violation: {permutation}")
-                        continue
-
-                    self._check_cancelled()
-                    permutation_result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
-                    permutation_results.append(permutation_result)
-                    results_per_dimension.append(permutation_result)
-
-                    # Save checkpoint after each permutation
-                    self._save_checkpoint(
-                        new_results=permutation_results,
-                        last_applied_order=list(permutation),
-                        executor_state={
-                            "greedy_state": {
-                                "resulting_order": list(resulting_order),
-                                "dimension_pool": list(dimension_pool),
-                                "iteration": iteration,
-                                "dimensions": list(dimensions),
-                                "tested_dims_in_current_round": [
-                                    d for d in dimension_pool
-                                    if d == dimension or (iteration == resume_iteration and d in resume_tested_dims)
-                                    or dimension_pool.index(d) < dimension_pool.index(dimension)
-                                ],
-                                "results_per_dimension_ids": [r.permutation_id for r in results_per_dimension],
-                            }
-                        })
-
-            # Clear resume state after first resumed iteration completes
-            if iteration == resume_iteration:
-                resume_tested_dims = set()
-                resumed_result_ids = set()
-
-            # only check for best results if any valid dim swaps are returned
-            if len(results_per_dimension) > 0:
-                if target_position > mid:
-                    best_order = sorted(
-                        results_per_dimension,
-                        key=lambda r: r.ram_usage)[0]
-                elif self.view_names:
-                    best_order = sorted(
-                        results_per_dimension,
-                        key=lambda r: r.composite_query_time())[0]
-                elif self.process_names:
-                    best_order = sorted(
-                        results_per_dimension,
-                        key=lambda r: r.composite_process_time())[0]
-                else:
-                    best_order = sorted(
-                        results_per_dimension,
-                        key=lambda r: r.ram_usage)[0]
-
-                resulting_order = list(best_order.dimension_order)
+            if results:
+                best = self._pick_best(results, ranking)
+                resulting_order = list(best.dimension_order)
                 dimension_pool.remove(resulting_order[target_position])
+                placed_positions.append(target_position)
 
         return permutation_results
 
