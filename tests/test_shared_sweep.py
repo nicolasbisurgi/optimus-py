@@ -233,3 +233,59 @@ def test_position_optimizer_skips_string_candidate_at_last_position(scripted):
     # No candidate was queried more than once.
     from collections import Counter
     assert all(count == 1 for count in Counter(string_calls).values())
+
+
+from optimuspy.executors import DimensionOptimizerExecutor
+
+
+def _make_dimension_optimizer(target_dimension, dims, has_strings=False):
+    ex = object.__new__(DimensionOptimizerExecutor)
+    ex.context = ExecutionContext()
+    ex.mode = ExecutionMode.ITERATIONS
+    ex.cube_name, ex.view_names, ex.process_names = "C", [], []
+    ex.cancel_event = ex.checkpoint_manager = None
+    ex.dimensions = list(dims)
+    ex.target_dimension = target_dimension
+    ex._resumed_results = []
+    ex._original_order_result = None
+    ex._initial_dimension_order = None
+    ex._has_string_elements = lambda name: has_strings
+    return ex
+
+
+def test_dimension_optimizer_sweeps_all_positions_except_current(scripted):
+    ex = _make_dimension_optimizer("A", ["A", "B", "C"])  # A at idx 0
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+    results = ex.execute()
+    # A moved into positions 1 and 2
+    assert [r.dimension_order.index("A") for r in results] == [1, 2]
+
+
+def test_dimension_optimizer_skips_last_position_for_string_dim(scripted):
+    ex = _make_dimension_optimizer("A", ["A", "B", "C"], has_strings=True)
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+    results = ex.execute()
+    assert all(r.dimension_order[-1] != "A" for r in results)
+
+
+def test_dimension_optimizer_resume_skips_completed_position(scripted):
+    # Position 1 is already completed from a prior checkpoint. On resume, the
+    # target dim must never be re-swapped into that position — only the
+    # remaining candidate position(s) get swept.
+    ex = _make_dimension_optimizer("A", ["A", "B", "C"])  # A at idx 0
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+
+    resume_state = {"executor_state": {"dimension_state": {"completed_positions": [1]}}}
+    results = ex.execute(resume_state)
+
+    # Position 1 was already completed: "A" must never land there again.
+    assert 1 not in [r.dimension_order.index("A") for r in results]
+    assert all(o[1] != "A" for o in log)
+    # Position 2 (the only remaining candidate) was genuinely swept.
+    assert [r.dimension_order.index("A") for r in results] == [2]
