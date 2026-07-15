@@ -122,3 +122,30 @@ def test_fold_a_process_front_not_pruned(scripted):
     assert any(o[0] == "B" for o in log)
     # The back position is still pinned to the dominant dim C.
     assert any(o[3] == "C" for o in log)
+
+
+def test_fold_a_freezes_excluded_dim(scripted):
+    # "Excl" is pinned via dimensions_to_exclude at its original index (0).
+    # dimension_pool already omits it from candidacy (pre-existing behaviour),
+    # but WITHOUT the occupant guard, nothing stops another candidate from
+    # being swept INTO position 0 (Excl's home), displacing it there.
+    # D3 dominates everything (>>4x) -> pinned to the back-most slot first;
+    # the pool remaining afterward (D1/D2/M, all mutually within tau of the
+    # smallest, M=3) makes position 0 (front, mid=2) a genuine multi-candidate
+    # sweep -- exactly the kind of sweep that would otherwise swap into Excl's
+    # frozen slot.
+    dims = ["Excl", "D1", "D2", "D3", "M"]
+    card = {"D1": 10, "D2": 12, "D3": 5000, "M": 3}
+    ex = make_main_executor(dims, card, measure_only_numeric=True)
+    ex.dimensions_to_exclude = ["Excl"]
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log) * 0.1, log)
+    ex.context.set_initial_ram(100.0)
+
+    ex._run_fold_a()
+
+    # (a) Excl never moves from its original index in ANY evaluated order.
+    assert all(o.index("Excl") == 0 for o in log)
+    # (b) Excl never appears anywhere other than its frozen slot -- i.e. it is
+    # never the dim newly swept into a target position.
+    assert all(o[0] == "Excl" for o in log)

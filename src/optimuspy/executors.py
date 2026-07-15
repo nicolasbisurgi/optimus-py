@@ -209,7 +209,7 @@ class OptipyzerExecutor:
         return results
 
     def _pick_best(self, results, ranking):
-        """Return the best result by the position's ranking metric (ascending)."""
+        """Return the best result by the ranking metric (ascending)."""
         if ranking == "query":
             key = lambda r: r.composite_query_time()
         elif ranking == "process":
@@ -324,6 +324,9 @@ class MainExecutor(OptipyzerExecutor):
                 break
             if target_position in placed_positions:
                 continue
+            # Positions held by an excluded (non-pool) dim are frozen — never sweep into them.
+            if resulting_order[target_position] not in dimension_pool:
+                continue
 
             unplaced = [(d, self.cardinality.get(d, 0)) for d in dimension_pool]
             ranking = tau.ranking_for_position(target_position, mid, has_views, has_processes)
@@ -356,16 +359,27 @@ class MainExecutor(OptipyzerExecutor):
 
         return permutation_results
 
-    def _seed_order(self) -> List[str]:
-        """Cardinality-ascending seed with string/measure dims pinned last."""
-        non_string = [d for d in self.dimensions if d not in self.string_dims]
-        string_last = [d for d in self.dimensions if d in self.string_dims]
+    def _seed_order(self):
+        """Cardinality-ascending seed with string/measure dims last.
+
+        Dimensions in dimensions_to_exclude are frozen at their original index;
+        only the movable dims are re-ordered, into the movable positions.
+        """
+        excluded = set(self.dimensions_to_exclude)
+        result = list(self.dimensions)
+        movable_positions = [i for i, d in enumerate(self.dimensions) if d not in excluded]
+        movable = [d for d in self.dimensions if d not in excluded]
+        non_string = [d for d in movable if d not in self.string_dims]
+        string_last = [d for d in movable if d in self.string_dims]
         non_string.sort(key=lambda d: self.cardinality.get(d, 0))
-        # keep the measure dim last when it is only-numeric (not in string_dims)
+        # keep the numeric measure last among the movable non-string dims
         if self.measure_dimension_only_numeric and self.dimensions[-1] in non_string:
             non_string.remove(self.dimensions[-1])
             non_string.append(self.dimensions[-1])
-        return non_string + string_last
+        ordered_movable = non_string + string_last
+        for pos, dim in zip(movable_positions, ordered_movable):
+            result[pos] = dim
+        return result
 
     def _run_fold_b(self, resume_state: dict = None) -> List[PermutationResult]:
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
@@ -399,14 +413,18 @@ class MainExecutor(OptipyzerExecutor):
             improved = False
             ordered = [(d, self.cardinality.get(d, 0)) for d in resulting_order]
             refine = [d for d in tau.fold_b_refine_order(ordered, tau_split)
-                      if d != pinned_last and d not in self.string_dims]
+                      if d != pinned_last and d not in self.string_dims
+                      and d not in self.dimensions_to_exclude]
+            excluded_positions = {i for i, d in enumerate(resulting_order)
+                                  if d in self.dimensions_to_exclude}
             for dim in refine:
                 current_idx = resulting_order.index(dim)
                 lo, hi = tau.fold_b_allowed_span(
                     dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], tau_span)
                 positions = [p for p in range(lo, hi + 1)
                              if p != current_idx
-                             and not (p == last and dim in self.string_dims)]
+                             and not (p == last and dim in self.string_dims)
+                             and p not in excluded_positions]
                 if not positions:
                     continue
 
@@ -415,7 +433,6 @@ class MainExecutor(OptipyzerExecutor):
                         new_results=permutation_results + results,
                         last_applied_order=list(results[-1].dimension_order),
                         executor_state={"fold_b_state": {
-                            "seed_order": self._seed_order(),
                             "current_order": list(resulting_order),
                             "pass_index": _p,
                         }})

@@ -208,3 +208,50 @@ def test_fold_b_resume_skips_seed_and_completed_passes(scripted):
     # the C- and B-sweeps within this same pass -> [1,2,3] again). 3+2+3=8, with
     # no seed-apply reorder.
     assert len(log) == 8
+
+
+def test_fold_b_freezes_excluded_dim(scripted):
+    # "Excl" is pinned via dimensions_to_exclude at its original index (1).
+    # card values are chosen so that:
+    #  - the OLD (unfixed) cardinality-only seed sort would relocate Excl (its
+    #    absolute rank among all four dims differs from its original slot);
+    #  - Excl is genuinely within tau of a neighbour (M, ratio ~1.67 < TAU_RAM)
+    #    is avoided (Excl/M = 30, clearly decided) so entanglement with the
+    #    pinned measure doesn't confuse the scenario; instead Excl sits close
+    #    to A (100/90 ~= 1.11 < TAU_RAM) so it would be marked "undecided" by
+    #    tau.fold_b_refine_order and swept if not explicitly excluded;
+    #  - A/B (100/110, ratio 1.1) are genuinely undecided, so refinement
+    #    actually runs on non-excluded dims;
+    #  - both A's and B's allowed spans legitimately include position 1
+    #    (Excl's slot), so without the positions exclusion a sweep of A or B
+    #    would collaterally displace Excl even though Excl itself is never
+    #    the swept target_dim.
+    dims = ["A", "Excl", "B", "M"]
+    card = {"A": 100, "Excl": 90, "B": 110, "M": 3}
+    ex = make_main_executor(dims, card, fast=True)
+    ex.dimensions_to_exclude = ["Excl"]
+    log = []
+    scripted(ex, lambda o: 100.0, log)  # ties everywhere -> nothing ever accepted
+    ex.context.set_initial_ram(100.0)
+
+    swept_dims = []
+    original_sweep = ex._sweep_across_positions
+
+    def spy_sweep(current_order, target_dim, candidate_positions, *args, **kwargs):
+        swept_dims.append(target_dim)
+        return original_sweep(current_order, target_dim, candidate_positions, *args, **kwargs)
+
+    ex._sweep_across_positions = spy_sweep
+
+    ex._run_fold_b()
+
+    # (a) the seed keeps Excl frozen at its ORIGINAL index (1), not resorted
+    # in among the movable dims by cardinality.
+    assert log[0].index("Excl") == 1
+    # (b) Excl is never the dimension a sweep repositions.
+    assert "Excl" not in swept_dims
+    # Refinement genuinely ran on the undecided movable dims (A, B).
+    assert set(swept_dims) == {"A", "B"}
+    # (c) Excl never leaves its seeded slot in ANY evaluated order -- proving
+    # A's/B's sweeps never collaterally swap into Excl's frozen position.
+    assert all(o.index("Excl") == 1 for o in log)

@@ -82,7 +82,7 @@ For traceability and custom analysis, Optimus visualizes the results in a csv re
 - Use big and representative views _(e.g. typical slices that end users consume)_
 - Choose a sensible number of `executions` between 5 and 10
 - Provide enough spare memory on TM1 server
-- Fast mode determines first and last position only _(Should get you 80% of possible improvement potential)_
+- Fast mode (`fast: true`) seeds from the cardinality-suggested order, then coordinate-descent refines only the dimensions leaf-count tolerance (τ) leaves undecided (≤2 passes); the default thorough fold searches the full τ-frontier
 - XLSX output is preferable over CSV output but requires optional `xlsxwrite` dependency
 - Choose a TI that loads data to the cube and runs for at least a few seconds
 
