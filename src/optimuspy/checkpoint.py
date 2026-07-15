@@ -8,7 +8,7 @@ from typing import List, Union
 
 from optimuspy.results import ExecutionContext, PermutationResult
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 class CheckpointManager:
@@ -24,8 +24,9 @@ class CheckpointManager:
         self._created_at = None
 
     @staticmethod
-    def compute_config_fingerprint(cube_config: dict) -> str:
-        config_str = json.dumps(cube_config, sort_keys=True)
+    def compute_config_fingerprint(cube_config: dict, extra: dict = None) -> str:
+        payload = {"config": cube_config, "extra": extra or {}}
+        config_str = json.dumps(payload, sort_keys=True)
         return hashlib.sha256(config_str.encode()).hexdigest()
 
     @property

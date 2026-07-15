@@ -24,25 +24,25 @@ OptimusPy benchmarks dimension orders by physically reordering the cube on the T
 
 Steps 2 and 7 are wrapped in a `try/finally` — even if the job fails or is cancelled, VMM/VMT and the original order are always restored.
 
-## The greedy outside-in algorithm
+## The cardinality-aware greedy (two folds)
 
-For an N-dimension cube, the algorithm walks position indices in the sequence:
+OptimusPy's greedy is **cardinality-aware**: it uses each dimension's leaf-element
+count and a **leaf-count tolerance ratio (τ)** to skip the storage orders that
+theory condemns while still measuring the genuinely ambiguous ones. The `fast`
+flag selects one of two folds:
 
-```
-N-1, 0, N-2, 1, N-3, 2, ..., (stops at the middle)
-```
+- **Thorough (`fast: false`, default)** walks positions outside-in (`N-1, 0,
+  N-2, 1, …`) and, at each, tests only the **τ-frontier** of the unplaced
+  dimensions — a dimension that dominates all others (e.g. a 50,000-leaf dim) is
+  *pinned* to the back in one reorder rather than tested everywhere.
+- **Fast (`fast: true`)** seeds from the cardinality-suggested order and then
+  coordinate-descent refines only the undecided dimensions across their τ-allowed
+  positions (≤ 2 passes).
 
-For each target position, it tries swapping every remaining dimension into that slot, measures, and locks the winner. This produces approximately `N × (N-1)` evaluations vs. `N!` for full enumeration:
+Pruning is keyed to the ranking metric, so **adding a view unlocks front-half
+pruning**. Uniform cubes (nothing decided) degrade gracefully to a full search.
 
-| Dims | Full enumeration | Greedy iterations |
-|---|---|---|
-| 5 | 120 | 20 |
-| 6 | 720 | 30 |
-| 7 | 5,040 | 42 |
-| 8 | 40,320 | 56 |
-| 10 | 3,628,800 | 90 |
-
-The greedy converges to a near-optimal order in a fraction of the time. It can miss the global optimum in rare interaction cases, which is why [Predefined Orders](../modes/predefined-orders.md) exists for hand-tuned A/B testing.
+→ Full explanation: [Cardinality-Aware Greedy Optimization](cardinality-aware-greedy.md).
 
 ## Composite metrics
 

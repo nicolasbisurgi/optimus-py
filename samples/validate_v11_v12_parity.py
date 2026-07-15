@@ -6,13 +6,15 @@ This is NOT a unit test and is NOT run in CI — it needs two live TM1 instances
 byte identical* 8-dimension cube, loaded with the *same* seeded random data, on
 both servers, then:
 
-  1. Reads the per-cube RAM baseline (``cube_memory_used``) from each server and
-     reports the raw value + Unit and the converted bytes. Equal post-conversion
-     bytes across versions are the proof that the Unit->bytes conversion is
-     correct (v11 reports ``B``, v12 reports ``KB``).
-  2. Runs every OptimusPy mode (greedy, fast greedy, predefined, position,
+  1. Runs every OptimusPy mode (greedy, fast greedy, predefined, position,
      dimension, set) against both servers and compares the winning storage order
      each mode picks. Identical data must yield the same winner on both versions.
+  2. Proves the ``cube_memory_used`` Unit->bytes conversion is correct (v11 reports
+     ``B``, v12 reports ``KB``) by checking that the *original-order* RAM OptimusPy
+     measured during those runs converts to near-equal bytes across versions — a
+     wrong conversion would differ by ~1024x. It uses the run-time reading (settled
+     cube), not the pre-run baseline sample, whose v12 gauge can lag right after the
+     bulk load. The pre-run baseline is still captured for information only.
   3. Writes a JSON snapshot (``--snapshot``). Run this script on the *pre-change*
      commit against the v11 instance, keep the snapshot, then run it again on the
      post-change commit and diff the two snapshots to confirm v11 behaviour is
@@ -55,11 +57,12 @@ from optimuspy.metrics import (  # noqa: E402
     detect_is_v12, unit_to_bytes, CUBE_MEMORY_METRIC,
 )
 
-# Test-side stabilization. The fixture is read right after a bulk load, when
-# cube_memory_used is still catching up — v11 transiently over-reports, v12
-# under-reports — so settle BOTH versions (poll until the value plateaus) before
-# comparing. This is the test knowing "what the size should be"; the product uses
-# the same idea (target-free plateau) only on v12.
+# Pre-run baseline sampling (informational only — the conversion proof uses the
+# settled original-order RAM from the mode runs; see _settled_original_ram). Right
+# after a bulk load cube_memory_used is still catching up, so poll until the value
+# plateaus. NOTE: v12's gauge can stay at the near-empty skeleton for longer than
+# this whole window (its refresh interval), so the pre-run v12 sample may under-
+# report; that is why it is not the proof source.
 _SETTLE_ATTEMPTS = 24
 _SETTLE_WAIT_SECONDS = 10
 _SETTLE_TOLERANCE = 0.01
@@ -163,10 +166,15 @@ def teardown_instance(tm1: TM1Service):
 # --- Reads ------------------------------------------------------------------
 
 def read_baseline(tm1: TM1Service, is_v12: bool) -> dict:
-    """Settle cube_memory_used, then report raw value + Unit and converted bytes.
+    """Read cube_memory_used once it plateaus; report raw value + Unit + bytes.
 
-    Polls until the value plateaus so both versions are measured on a settled cube
-    (is_v12 is accepted for call-site symmetry; the settle is version-neutral here).
+    This is a best-effort *pre-run informational* sample only. It is NOT the
+    conversion-proof source: right after the fresh bulk load, v12's
+    cube_memory_used gauge can sit at the near-empty cube skeleton for longer than
+    any reasonable pre-run settle window (its sampled-gauge refresh interval), so
+    this can report the skeleton size on v12. The conversion proof instead uses the
+    original-order RAM OptimusPy measures *during* the mode runs, which is read on a
+    settled cube on both versions (see _settled_original_ram / compare).
     """
     best = None
     raw = None
@@ -275,21 +283,48 @@ def process_instance(name: str, config_ini: str, password: str, do_setup: bool) 
             "baseline": baseline, "modes": modes}
 
 
+def _settled_original_ram(snapshot: dict):
+    """The original-order RAM OptimusPy measured during the mode runs, in bytes.
+
+    Every optimize mode reads the same original order first (OriginalOrderExecutor),
+    parsed back as ``original_ram_bytes``. That read happens well after the load, on
+    a settled cube, via the product's own version-aware read path — so it is the
+    reliable cross-version conversion-proof value, unlike the pre-run read_baseline
+    whose v12 sample can still be the pre-climb skeleton. Returns the first
+    available mode's value (they all read the identical original order).
+    """
+    for mode in MODE_CONFIGS:
+        res = (snapshot.get("modes", {}).get(mode) or {}).get("result") or {}
+        val = res.get("original_ram_bytes")
+        if val:
+            return val
+    return None
+
+
 def compare(v11: dict, v12: dict) -> bool:
     print("\n=== PARITY REPORT ===")
     ok = True
 
-    b11, b12 = v11["baseline"]["bytes"], v12["baseline"]["bytes"]
-    delta = abs(b11 - b12)
-    tol = max(b11, b12) * 0.001  # 0.1% — identical data should be near-identical
-    conv_ok = delta <= tol
-    ok &= conv_ok
-    print(f"\nRAM baseline (Unit->bytes conversion proof):")
-    print(f"  v11: {v11['baseline']['raw_value']} {v11['baseline']['raw_unit']} "
-          f"-> {b11:.0f} bytes")
-    print(f"  v12: {v12['baseline']['raw_value']} {v12['baseline']['raw_unit']} "
-          f"-> {b12:.0f} bytes")
-    print(f"  delta {delta:.0f} bytes ({'PASS' if conv_ok else 'FAIL'}; tol {tol:.0f})")
+    # Conversion proof uses the settled original-order RAM the product measured
+    # during the runs (both versions), NOT the pre-run baseline sample (v12's gauge
+    # can lag behind the fresh load). If the Unit->bytes conversion were wrong, v11
+    # (B) and v12 (KB) would differ by ~1024x rather than by identical-data noise.
+    o11, o12 = _settled_original_ram(v11), _settled_original_ram(v12)
+    print(f"\nRAM (Unit->bytes conversion proof — original-order RAM as measured during the runs):")
+    if o11 and o12:
+        delta = abs(o11 - o12)
+        tol = max(o11, o12) * 0.001  # 0.1% — identical data should be near-identical
+        conv_ok = delta <= tol
+        ok &= conv_ok
+        print(f"  v11 -> {o11:.0f} bytes")
+        print(f"  v12 -> {o12:.0f} bytes")
+        print(f"  delta {delta:.0f} bytes ({'PASS' if conv_ok else 'FAIL'}; tol {tol:.0f})")
+    else:
+        ok = False
+        print("  FAIL (no original-order RAM captured on one version)")
+    print(f"  [pre-run baseline sample, informational — v12 may lag right after load] "
+          f"v11: {v11['baseline']['raw_value']} {v11['baseline']['raw_unit']}; "
+          f"v12: {v12['baseline']['raw_value']} {v12['baseline']['raw_unit']}")
 
     print(f"\nMode winner parity:")
     for mode in MODE_CONFIGS:

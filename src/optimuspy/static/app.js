@@ -18,6 +18,7 @@ const OptimusPy = (function () {
     password: null,
     connected: false,
     serverName: null,
+    configReadOnly: false,
 
     // Scan
     scanData: null,
@@ -1366,6 +1367,7 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getInstances();
         state.instances = data.instances || [];
+        state.configReadOnly = data.read_only || false;
         this.renderInstanceSwitcher();
       } catch (err) {
         Toast.error("Failed to load instances: " + err.message);
@@ -1887,7 +1889,7 @@ const OptimusPy = (function () {
       howTo.appendChild(el("div", { style: "margin-top:14px;padding-top:14px;border-top:1px solid var(--border-secondary)" }));
       howTo.appendChild(el("div", { style: "font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px" }, "Optimization Modes"));
       const modes = [
-        { badge: "Greedy", color: "var(--accent)", desc: "Outside-in algorithm. Tests each dimension for first and last position, then works inward. Best general-purpose approach." },
+        { badge: "Greedy", color: "var(--accent)", desc: "Cardinality-aware outside-in search: uses leaf-count tolerance (τ) to test only the orderings measurement must decide and pins clearly-placed dimensions. Toggle Fast mode for the seed-and-refine fold. Best general-purpose approach." },
         { badge: "Predefined", color: "var(--warning)", desc: "Benchmarks specific dimension orders you define. Use when you have candidate orders from manual analysis." },
         { badge: "Position", color: "var(--success)", desc: "Tests all dimensions for a single position (e.g., find the best last dimension). Quick, targeted optimization." },
         { badge: "Dimension", color: "var(--error)", desc: "Tests all positions for a single dimension. Useful when you know which dimension to focus on." },
@@ -2628,20 +2630,9 @@ const OptimusPy = (function () {
       // Show scan-level data immediately if available
       const scanCandidate = (state.scanData?.candidates || []).find(c => c.cube_name === this._cubeName);
 
-      // Storage order (from scan data or will load from intelligence)
-      const orderCard = el("div", { className: "card mb-4" });
-      orderCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order"));
-      const orderList = el("div", { className: "flex gap-2", style: "flex-wrap:wrap" });
+      // Current storage order — shown as badges before analysis, then merged into
+      // the Dimension Details table (with a position column) once metadata loads.
       const storageOrder = scanCandidate?.storage_order || state.cubeMetadata[this._cubeName]?.storage_order || [];
-      if (storageOrder.length > 0) {
-        storageOrder.forEach((dim, i) => {
-          orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
-        });
-      } else {
-        orderList.appendChild(el("span", { className: "text-tertiary text-sm" }, "Load metadata to see storage order"));
-      }
-      orderCard.appendChild(orderList);
-      container.appendChild(orderCard);
 
       // Cube stats from scan
       if (scanCandidate) {
@@ -2717,6 +2708,18 @@ const OptimusPy = (function () {
         metaSection.appendChild(refreshRow);
         this._renderFullMetadata(metaSection, intel);
       } else {
+        // Pre-analysis: show the current storage order as badges (leaf counts,
+        // strings, etc. load on demand and then merge into one ordered table).
+        if (storageOrder.length > 0) {
+          const orderCard = el("div", { className: "card mb-4" });
+          orderCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order"));
+          const orderList = el("div", { className: "flex gap-2", style: "flex-wrap:wrap" });
+          storageOrder.forEach((dim, i) => {
+            orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
+          });
+          orderCard.appendChild(orderList);
+          metaSection.appendChild(orderCard);
+        }
         // Show button to analyze cube (fetches dimension metadata + views)
         const loadBtn = el("button", { className: "btn btn-primary" },
           el("span", { html: Icons.search }), "Analyze Cube Dimensions & Views");
@@ -2742,13 +2745,6 @@ const OptimusPy = (function () {
             ]);
             metaSection.innerHTML = "";
             this._renderFullMetadata(metaSection, data);
-            // Also update storage order if it wasn't from scan
-            if (storageOrder.length === 0) {
-              orderList.innerHTML = "";
-              (data.storage_order || []).forEach((dim, i) => {
-                orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
-              });
-            }
             Toast.success("Cube analysis complete");
           } catch (err) {
             metaSection.innerHTML = "";
@@ -2781,12 +2777,18 @@ const OptimusPy = (function () {
         container.appendChild(sugCard);
       }
 
-      // Dimension details table
+      // Storage order + dimension details, merged: rows are ordered by the cube's
+      // current storage order (position column), each with its leaf count / strings.
       const metaCard = el("div", { className: "card" });
-      metaCard.appendChild(el("div", { className: "card-title mb-2" }, "Dimension Details"));
+      metaCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order & Dimension Details"));
       const dimList = Array.isArray(intel.dimensions_metadata) ? intel.dimensions_metadata : [];
+      const byName = {};
+      dimList.forEach(d => { byName[d.name] = d; });
+      const order = (intel.storage_order && intel.storage_order.length) ? intel.storage_order : dimList.map(d => d.name);
+      const orderedDims = order.map((name, i) => Object.assign({ position: i + 1 }, byName[name] || { name, leaf_elements: 0, has_strings: false, string_elements: 0 }));
       const metaTable = createTable({
         columns: [
+          { key: "position", label: "#", align: "right", value: r => r.position },
           { key: "name", label: "Dimension" },
           { key: "leaf_elements", label: "Leaf Elements", align: "right", value: r => (r.leaf_elements || 0).toLocaleString() },
           { key: "has_strings", label: "Strings", render: r =>
@@ -2794,7 +2796,7 @@ const OptimusPy = (function () {
           },
           { key: "string_elements", label: "String Count", align: "right", value: r => r.string_elements || 0 },
         ],
-        data: dimList,
+        data: orderedDims,
         sortable: true,
         filterable: false,
       });
@@ -2857,7 +2859,10 @@ const OptimusPy = (function () {
       const fastLabel = el("label", { className: "checkbox-label" });
       const fastCb = el("input", { type: "checkbox" });
       fastLabel.appendChild(fastCb);
-      fastLabel.appendChild(document.createTextNode("Fast mode"));
+      fastLabel.appendChild(document.createTextNode("Fast mode (seed & refine)"));
+      fastLabel.title = "Seed from the cardinality-suggested order, then refine only " +
+        "the dimensions leaf-count theory leaves ambiguous. Faster than a full search; " +
+        "unchecked runs the thorough search.";
       toggleRow.appendChild(fastLabel);
 
       const autoApplyLabel = el("label", { className: "checkbox-label" });
@@ -2867,8 +2872,27 @@ const OptimusPy = (function () {
       toggleRow.appendChild(autoApplyLabel);
       leftCol.appendChild(toggleRow);
 
-      // Dimensions section
-      leftCol.appendChild(el("div", { className: "section-divider" }, "Dimensions"));
+      // Dimensions section — dimensions are listed in the cube's current storage
+      // order; the Refresh button re-fetches it (e.g. after applying an optimization).
+      const dimsHeader = el("div", { className: "section-divider flex items-center gap-2" });
+      dimsHeader.appendChild(document.createTextNode("Dimensions"));
+      const dimRefreshBtn = el("button", {
+        className: "btn btn-ghost btn-sm", style: "margin-left:auto",
+        title: "Re-fetch the current storage order from TM1 (use after applying an optimization run)",
+      }, el("span", { html: Icons.refresh }), "Refresh");
+      dimRefreshBtn.addEventListener("click", async () => {
+        delete state.cubeMetadata[this._cubeName];
+        IntelCache.clear(state.activeInstance, this._cubeName);
+        container.innerHTML = "";
+        try {
+          await this._renderConfigure(container);
+          Toast.success("Dimension order refreshed");
+        } catch (err) {
+          Toast.error("Refresh failed: " + err.message);
+        }
+      });
+      dimsHeader.appendChild(dimRefreshBtn);
+      leftCol.appendChild(dimsHeader);
 
       // Suggested order button — only shown in predefined mode
       const sugBtn = el("button", { className: "btn btn-secondary btn-sm mb-2" },
@@ -3976,36 +4000,42 @@ const OptimusPy = (function () {
         const instancesCard = el("div", { className: "card mb-4" });
         instancesCard.appendChild(el("div", { className: "card-title mb-4" }, "TM1 Instances"));
 
-        // "New Instance" button
-        const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
-          const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
-          const bodyEl = el("div", null,
-            el("label", { className: "form-label" }, "Instance Name"),
-            nameInput,
-          );
-          Modal.open({
-            title: "New TM1 Instance",
-            body: bodyEl,
-            footer: [
-              el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
-              el("button", { className: "btn btn-primary", onClick: async () => {
-                const name = nameInput.value.trim();
-                if (!name) { Toast.error("Instance name is required"); return; }
-                try {
-                  await Api.createInstance(name, {});
-                  Toast.success(`Instance "${name}" created`);
-                  Modal.close();
-                  await Sidebar.loadInstances();
-                  this.mount();
-                } catch (err) {
-                  Toast.error(err.message);
-                }
-              }}, "Create"),
-            ],
-          });
-          nameInput.focus();
-        }}, el("span", { html: Icons.plus }), " New Instance");
-        instancesCard.appendChild(newInstanceBtn);
+        if (state.configReadOnly) {
+          instancesCard.appendChild(el("div", {
+            className: "readonly-banner mb-3",
+          }, "This config.ini is managed externally — read-only. Edit it where it is maintained (e.g. the shared file or RushTI)."));
+        } else {
+          // "New Instance" button
+          const newInstanceBtn = el("button", { className: "btn btn-secondary btn-sm mb-3", onClick: () => {
+            const nameInput = el("input", { className: "form-input", type: "text", placeholder: "Instance name (e.g. prod_server)" });
+            const bodyEl = el("div", null,
+              el("label", { className: "form-label" }, "Instance Name"),
+              nameInput,
+            );
+            Modal.open({
+              title: "New TM1 Instance",
+              body: bodyEl,
+              footer: [
+                el("button", { className: "btn btn-ghost", onClick: () => Modal.close() }, "Cancel"),
+                el("button", { className: "btn btn-primary", onClick: async () => {
+                  const name = nameInput.value.trim();
+                  if (!name) { Toast.error("Instance name is required"); return; }
+                  try {
+                    await Api.createInstance(name, {});
+                    Toast.success(`Instance "${name}" created`);
+                    Modal.close();
+                    await Sidebar.loadInstances();
+                    this.mount();
+                  } catch (err) {
+                    Toast.error(err.message);
+                  }
+                }}, "Create"),
+              ],
+            });
+            nameInput.focus();
+          }}, el("span", { html: Icons.plus }), " New Instance");
+          instancesCard.appendChild(newInstanceBtn);
+        }
 
         if (state.instances.length === 0) {
           instancesCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No instances configured. Add one to get started."));
@@ -4080,6 +4110,7 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getInstance(instanceName);
         const params = data.params || {};
+        const ro = state.configReadOnly;
         const fieldsContainer = el("div", { className: "instance-fields" });
 
         // Render existing fields (skip password — handled separately)
@@ -4088,48 +4119,57 @@ const OptimusPy = (function () {
           fieldsContainer.appendChild(this._createFieldRow(key, value, instanceName, fieldsContainer));
         });
         container.appendChild(fieldsContainer);
+        if (ro) {
+          fieldsContainer.querySelectorAll("input").forEach(i => { i.disabled = true; });
+          fieldsContainer.querySelectorAll("button").forEach(b => b.remove());
+        }
 
-        // "Add Field" button
-        const addFieldBtn = el("button", { className: "btn btn-secondary btn-sm mt-2", onClick: () => {
-          const row = this._createFieldRow("", "", instanceName, fieldsContainer, true);
-          fieldsContainer.appendChild(row);
-          // Focus the key input
-          const keyInput = row.querySelector("[data-field-key]");
-          if (keyInput) keyInput.focus();
-        }}, el("span", { html: Icons.plus }), " Add Field");
-        container.appendChild(addFieldBtn);
+        let pwInput = null;
+        if (!ro) {
+          // "Add Field" button
+          const addFieldBtn = el("button", { className: "btn btn-secondary btn-sm mt-2", onClick: () => {
+            const row = this._createFieldRow("", "", instanceName, fieldsContainer, true);
+            fieldsContainer.appendChild(row);
+            // Focus the key input
+            const keyInput = row.querySelector("[data-field-key]");
+            if (keyInput) keyInput.focus();
+          }}, el("span", { html: Icons.plus }), " Add Field");
+          container.appendChild(addFieldBtn);
 
-        // Password field (write-only)
-        const pwGroup = el("div", { className: "form-group mt-4" });
-        pwGroup.appendChild(el("label", { className: "form-label" }, "Update Password (write-only)"));
-        const pwInput = el("input", { className: "form-input", type: "password", placeholder: "Leave empty to keep current", dataset: { key: "password" } });
-        pwGroup.appendChild(pwInput);
-        container.appendChild(pwGroup);
+          // Password field (write-only)
+          const pwGroup = el("div", { className: "form-group mt-4" });
+          pwGroup.appendChild(el("label", { className: "form-label" }, "Update Password (write-only)"));
+          pwInput = el("input", { className: "form-input", type: "password", placeholder: "Leave empty to keep current", dataset: { key: "password" } });
+          pwGroup.appendChild(pwInput);
+          container.appendChild(pwGroup);
+        }
 
         // Action buttons row
         const actionsRow = el("div", { className: "flex gap-2 mt-4 flex-wrap" });
 
-        // Save button
-        const saveBtn = el("button", { className: "btn btn-primary" }, "Save");
-        saveBtn.addEventListener("click", async () => {
-          const newParams = {};
-          fieldsContainer.querySelectorAll("[data-field-row]").forEach(row => {
-            const keyEl = row.querySelector("[data-field-key]");
-            const valEl = row.querySelector("[data-field-value]");
-            const key = keyEl ? (keyEl.dataset.fieldKey || keyEl.value || "").trim() : "";
-            const val = valEl ? valEl.value : "";
-            if (key) newParams[key] = val;
+        if (!ro) {
+          // Save button
+          const saveBtn = el("button", { className: "btn btn-primary" }, "Save");
+          saveBtn.addEventListener("click", async () => {
+            const newParams = {};
+            fieldsContainer.querySelectorAll("[data-field-row]").forEach(row => {
+              const keyEl = row.querySelector("[data-field-key]");
+              const valEl = row.querySelector("[data-field-value]");
+              const key = keyEl ? (keyEl.dataset.fieldKey || keyEl.value || "").trim() : "";
+              const val = valEl ? valEl.value : "";
+              if (key) newParams[key] = val;
+            });
+            // Include password only if non-empty
+            if (pwInput.value) newParams.password = pwInput.value;
+            try {
+              await Api.updateInstance(instanceName, newParams);
+              Toast.success(`Config saved for ${instanceName}`);
+            } catch (err) {
+              Toast.error(err.message);
+            }
           });
-          // Include password only if non-empty
-          if (pwInput.value) newParams.password = pwInput.value;
-          try {
-            await Api.updateInstance(instanceName, newParams);
-            Toast.success(`Config saved for ${instanceName}`);
-          } catch (err) {
-            Toast.error(err.message);
-          }
-        });
-        actionsRow.appendChild(saveBtn);
+          actionsRow.appendChild(saveBtn);
+        }
 
         // Test Connection button
         const testBtn = el("button", { className: "btn btn-secondary" }, "Test Connection");
@@ -4137,7 +4177,7 @@ const OptimusPy = (function () {
           testBtn.disabled = true;
           testBtn.textContent = "Testing...";
           try {
-            const pw = pwInput.value || state.password || null;
+            const pw = (pwInput && pwInput.value) || state.password || null;
             const resp = await Api.connect(instanceName, pw);
             Toast.success(`Connected to ${resp.server_name} (${resp.cube_count} cubes)`);
           } catch (err) {
@@ -4149,22 +4189,24 @@ const OptimusPy = (function () {
         });
         actionsRow.appendChild(testBtn);
 
-        // Delete Instance button
-        const deleteBtn = el("button", { className: "btn btn-danger" }, "Delete Instance");
-        deleteBtn.addEventListener("click", () => {
-          Modal.confirm(`Delete instance "${instanceName}" from config.ini? This cannot be undone.`, async () => {
-            try {
-              await Api.deleteInstance(instanceName);
-              Toast.success(`Instance "${instanceName}" deleted`);
-              // Reload instances and re-render settings
-              await Sidebar.loadInstances();
-              this.mount();
-            } catch (err) {
-              Toast.error(err.message);
-            }
+        if (!ro) {
+          // Delete Instance button
+          const deleteBtn = el("button", { className: "btn btn-danger" }, "Delete Instance");
+          deleteBtn.addEventListener("click", () => {
+            Modal.confirm(`Delete instance "${instanceName}" from config.ini? This cannot be undone.`, async () => {
+              try {
+                await Api.deleteInstance(instanceName);
+                Toast.success(`Instance "${instanceName}" deleted`);
+                // Reload instances and re-render settings
+                await Sidebar.loadInstances();
+                this.mount();
+              } catch (err) {
+                Toast.error(err.message);
+              }
+            });
           });
-        });
-        actionsRow.appendChild(deleteBtn);
+          actionsRow.appendChild(deleteBtn);
+        }
 
         container.appendChild(actionsRow);
       } catch (err) {

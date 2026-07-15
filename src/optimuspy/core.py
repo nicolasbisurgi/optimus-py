@@ -8,11 +8,12 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import List
+from typing import List, NamedTuple, Optional
 
 from TM1py import TM1Service
 from mdxpy import MdxBuilder, Member, MdxHierarchySet
 
+from optimuspy import tau
 from optimuspy.checkpoint import CheckpointManager
 from optimuspy.executors import (OriginalOrderExecutor, MainExecutor, PredefinedOrderExecutor,
                                  PositionOptimizerExecutor, DimensionOptimizerExecutor,
@@ -26,6 +27,7 @@ TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 LOGFILE = APP_NAME + ".log"
 RESULT_PATH = Path("results/")
 RESULT_FILENAME = "{}_{}_{}"  # instance, cube_name, timestamp
+DEFAULT_CONFIG_INI = "config/config.ini"
 
 
 def set_current_directory():
@@ -79,6 +81,26 @@ def get_tm1_config(config_ini_path: str):
     config = configparser.ConfigParser()
     config.read(config_ini_path, encoding="utf-8")
     return config
+
+
+class ConfigLocation(NamedTuple):
+    path: str
+    read_only: bool
+
+
+def resolve_config_path(cli_path: Optional[str]) -> ConfigLocation:
+    """Resolve the config.ini path and whether it must be treated as read-only.
+
+    A path supplied explicitly via --config is assumed to be owned by another tool
+    (shared credentials) and is therefore read-only. The built-in default is OptimusPy's
+    own file and remains writable. Existence is checked only for an explicit path
+    (fail-fast); the default is left to the existing read path.
+    """
+    if cli_path is None:
+        return ConfigLocation(DEFAULT_CONFIG_INI, read_only=False)
+    if not os.path.isfile(cli_path):
+        raise FileNotFoundError(cli_path)
+    return ConfigLocation(cli_path, read_only=True)
 
 
 def load_cube_config(path: str) -> dict:
@@ -329,7 +351,10 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
     optimus_result = None
 
     # Checkpoint setup
-    config_fingerprint = CheckpointManager.compute_config_fingerprint(cube_config) if cube_config else ""
+    config_fingerprint = CheckpointManager.compute_config_fingerprint(
+        cube_config,
+        extra={"tau_ram": tau.TAU_RAM, "tau_query": tau.TAU_QUERY,
+               "fold_b_max_passes": tau.FOLD_B_MAX_PASSES}) if cube_config else ""
     checkpoint_mgr = CheckpointManager(
         cube_name, instance_name, config_fingerprint, RESULT_PATH,
         tm1=tm1 if tm1_checkpoint else None)
@@ -415,12 +440,15 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     cancel_event=cancel_event, is_v12=is_v12)
             else:
+                dimensions_metadata = _collect_dimension_metadata(tm1, displayed_dimension_order)
+                cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}
+                string_dims = [d["name"] for d in dimensions_metadata if d["has_strings"]]
                 executor = MainExecutor(
                     tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
                     measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     dimension_position_rules=dimension_position_rules, cancel_event=cancel_event,
-                    is_v12=is_v12)
+                    is_v12=is_v12, cardinality=cardinality, string_dims=string_dims)
 
             # Set resume context on executor
             executor.set_resume_context(initial_dimension_order, original_order_result, resumed_results)

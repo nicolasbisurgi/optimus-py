@@ -19,7 +19,7 @@ Every field accepted by an OptimusPy cube config, with types, defaults, and vali
 | `processes` | array of strings | `[]` | TI process names to benchmark. Each runs `executions` times. |
 | `process_parameters` | object | `{}` | Per-process parameter overrides. See [Multi-Process](multi-view-multi-process.md). |
 | `update` / `auto_apply` | boolean | `false` | `true` writes the best order back to the cube. `false` restores original. |
-| `fast` | boolean | `false` | Faster greedy mode (stops after 2 outer iterations). |
+| `fast` | boolean | `false` | Fast fold: seed from the cardinality-suggested order, then coordinate-descent refine only the τ-undecided dimensions (≤2 passes). `false` runs the thorough τ-frontier search. |
 | `dimensions_to_exclude` | array of strings | `[]` | Keep these dims fixed during greedy search. |
 
 ## Optional fields — mode-specific

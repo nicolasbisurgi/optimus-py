@@ -2933,3 +2933,12 @@ input[type="range"]:focus {
 .instance-fields {
   margin-bottom: 0.5rem;
 }
+
+.readonly-banner {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--warning, #d9a441);
+  background: color-mix(in srgb, var(--warning, #d9a441) 12%, transparent);
+  color: var(--text-secondary, #b8b8b8);
+  font-size: 13px;
+}
