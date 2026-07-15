@@ -22,6 +22,16 @@ _Avoid_: "StatsByCube" / "PerfCubes" (v11 control cubes, now hidden behind Metri
 The unit tag MetricService attaches to each metric value (`B`, `KB`, `MB`, `#`, `%`…). MetricService normalises metric *names* across versions but **not** units — `cube_memory_used` is `B` on v11 and `KB` on v12. Callers must read `Unit` and convert to bytes.
 _Avoid_: assuming a fixed unit; hardcoding `×1024`
 
+### Dimension shape
+
+**cardinality**:
+The number of leaf-level elements in a dimension. The cheap, reorder-free signal OptimusPy uses to decide, pin, and prune dimension orderings in the greedy optimizer. Distinct from RAM: a high-**cardinality** dimension is not necessarily a large **RAM baseline** contributor (density/sparsity matters more), which is why placement is still confirmed by measurement.
+_Avoid_: "size" (reserved-against for memory — ambiguous), "dimension size", "number of elements" (imprecise about leaf vs consolidated)
+
+**leaf-count tolerance (τ)**:
+The ratio that decides whether the greedy will test *both* relative orderings of two dimensions. If one dimension's **cardinality** is ≥ τ× another's, theory decides the order (larger ⇒ sparser ⇒ later) and the reverse ordering is never tested; within τ the pair is *undecided* and both orderings are tested, because density — which OptimusPy cannot know in advance — may justify either. Larger τ ⇒ looser ⇒ more orderings tested. Applied full-strength at RAM-ranked positions, looser at query-ranked positions, and not at all at process-ranked positions (see `docs/adr/0002`). Pinning a dimension (e.g. a 50k-leaf dim to the back) is just the degenerate case where τ leaves it the only candidate for an end position.
+_Avoid_: "bucket" / "size band" — an earlier, lossier framing; dimensions do not fall into fixed cardinality bands, ordering is decided pairwise.
+
 ## Relationships
 
 - A **permutation** (storage dimension order) produces one **RAM baseline** reading via **cube_memory_used**
