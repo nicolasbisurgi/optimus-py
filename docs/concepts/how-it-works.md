@@ -26,37 +26,23 @@ Steps 2 and 7 are wrapped in a `try/finally` — even if the job fails or is can
 
 ## The cardinality-aware greedy (two folds)
 
-OptimusPy compares each dimension's **cardinality** (leaf-element count — a
-cheap, reorder-free signal) using a **leaf-count tolerance ratio (τ)**. When one
-dimension's cardinality is at least τ× another's, leaf-count theory *decides*
-their order (larger ⇒ sparser ⇒ later) and the reverse is never tested. When two
-dimensions are within τ, the pair is *undecided* and both orderings are measured —
-density, which OptimusPy cannot know in advance, picks the winner.
+OptimusPy's greedy is **cardinality-aware**: it uses each dimension's leaf-element
+count and a **leaf-count tolerance ratio (τ)** to skip the storage orders that
+theory condemns while still measuring the genuinely ambiguous ones. The `fast`
+flag selects one of two folds:
 
-τ is **keyed to the ranking metric** (see ADR-0002): full strength at RAM-ranked
-positions, looser at query-ranked front positions, and switched off at
-process-ranked front positions (cardinality cannot predict process time).
-**Adding a view unlocks front-half pruning** — it is the user-facing lever for
-making a slow process-only cube fast.
+- **Thorough (`fast: false`, default)** walks positions outside-in (`N-1, 0,
+  N-2, 1, …`) and, at each, tests only the **τ-frontier** of the unplaced
+  dimensions — a dimension that dominates all others (e.g. a 50,000-leaf dim) is
+  *pinned* to the back in one reorder rather than tested everywhere.
+- **Fast (`fast: true`)** seeds from the cardinality-suggested order and then
+  coordinate-descent refines only the undecided dimensions across their τ-allowed
+  positions (≤ 2 passes).
 
-Two folds, selected by the `fast` flag:
+Pruning is keyed to the ranking metric, so **adding a view unlocks front-half
+pruning**. Uniform cubes (nothing decided) degrade gracefully to a full search.
 
-- **Thorough (`fast: false`, default)** walks position indices `N-1, 0, N-2,
-  1, …` outside-in. At each position it tests only the **τ-frontier** of the
-  unplaced dimensions (those within τ of the position's extreme cardinality),
-  locks the measured winner, and continues. A dimension that dominates every
-  other by ≫ τ (e.g. a 50,000-leaf dimension) is the sole candidate for the
-  back-most slot — it is *pinned* there in a single reorder and never tested
-  elsewhere.
-- **Fast (`fast: true`)** seeds from the cardinality-suggested order (ascending
-  cardinality, string/measure dims last), applies it in one reorder, then runs
-  **coordinate-descent** refinement: each *undecided* dimension is swept across
-  only its τ-allowed positions, largest dimensions first, for at most two passes
-  (stopping early once a pass improves nothing).
-
-If every dimension is within τ of the next, nothing is decided and the thorough
-fold degrades gracefully to a full outside-in search — uniform cubes are
-unaffected by construction.
+→ Full explanation: [Cardinality-Aware Greedy Optimization](cardinality-aware-greedy.md).
 
 ## Composite metrics
 
