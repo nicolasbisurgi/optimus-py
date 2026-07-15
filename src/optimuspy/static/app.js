@@ -2630,20 +2630,9 @@ const OptimusPy = (function () {
       // Show scan-level data immediately if available
       const scanCandidate = (state.scanData?.candidates || []).find(c => c.cube_name === this._cubeName);
 
-      // Storage order (from scan data or will load from intelligence)
-      const orderCard = el("div", { className: "card mb-4" });
-      orderCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order"));
-      const orderList = el("div", { className: "flex gap-2", style: "flex-wrap:wrap" });
+      // Current storage order — shown as badges before analysis, then merged into
+      // the Dimension Details table (with a position column) once metadata loads.
       const storageOrder = scanCandidate?.storage_order || state.cubeMetadata[this._cubeName]?.storage_order || [];
-      if (storageOrder.length > 0) {
-        storageOrder.forEach((dim, i) => {
-          orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
-        });
-      } else {
-        orderList.appendChild(el("span", { className: "text-tertiary text-sm" }, "Load metadata to see storage order"));
-      }
-      orderCard.appendChild(orderList);
-      container.appendChild(orderCard);
 
       // Cube stats from scan
       if (scanCandidate) {
@@ -2719,6 +2708,18 @@ const OptimusPy = (function () {
         metaSection.appendChild(refreshRow);
         this._renderFullMetadata(metaSection, intel);
       } else {
+        // Pre-analysis: show the current storage order as badges (leaf counts,
+        // strings, etc. load on demand and then merge into one ordered table).
+        if (storageOrder.length > 0) {
+          const orderCard = el("div", { className: "card mb-4" });
+          orderCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order"));
+          const orderList = el("div", { className: "flex gap-2", style: "flex-wrap:wrap" });
+          storageOrder.forEach((dim, i) => {
+            orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
+          });
+          orderCard.appendChild(orderList);
+          metaSection.appendChild(orderCard);
+        }
         // Show button to analyze cube (fetches dimension metadata + views)
         const loadBtn = el("button", { className: "btn btn-primary" },
           el("span", { html: Icons.search }), "Analyze Cube Dimensions & Views");
@@ -2744,13 +2745,6 @@ const OptimusPy = (function () {
             ]);
             metaSection.innerHTML = "";
             this._renderFullMetadata(metaSection, data);
-            // Also update storage order if it wasn't from scan
-            if (storageOrder.length === 0) {
-              orderList.innerHTML = "";
-              (data.storage_order || []).forEach((dim, i) => {
-                orderList.appendChild(el("span", { className: "badge badge-neutral" }, `${i + 1}. ${dim}`));
-              });
-            }
             Toast.success("Cube analysis complete");
           } catch (err) {
             metaSection.innerHTML = "";
@@ -2783,12 +2777,18 @@ const OptimusPy = (function () {
         container.appendChild(sugCard);
       }
 
-      // Dimension details table
+      // Storage order + dimension details, merged: rows are ordered by the cube's
+      // current storage order (position column), each with its leaf count / strings.
       const metaCard = el("div", { className: "card" });
-      metaCard.appendChild(el("div", { className: "card-title mb-2" }, "Dimension Details"));
+      metaCard.appendChild(el("div", { className: "card-title mb-2" }, "Current Storage Order & Dimension Details"));
       const dimList = Array.isArray(intel.dimensions_metadata) ? intel.dimensions_metadata : [];
+      const byName = {};
+      dimList.forEach(d => { byName[d.name] = d; });
+      const order = (intel.storage_order && intel.storage_order.length) ? intel.storage_order : dimList.map(d => d.name);
+      const orderedDims = order.map((name, i) => Object.assign({ position: i + 1 }, byName[name] || { name, leaf_elements: 0, has_strings: false, string_elements: 0 }));
       const metaTable = createTable({
         columns: [
+          { key: "position", label: "#", align: "right", value: r => r.position },
           { key: "name", label: "Dimension" },
           { key: "leaf_elements", label: "Leaf Elements", align: "right", value: r => (r.leaf_elements || 0).toLocaleString() },
           { key: "has_strings", label: "Strings", render: r =>
@@ -2796,7 +2796,7 @@ const OptimusPy = (function () {
           },
           { key: "string_elements", label: "String Count", align: "right", value: r => r.string_elements || 0 },
         ],
-        data: dimList,
+        data: orderedDims,
         sortable: true,
         filterable: false,
       });
@@ -2872,8 +2872,27 @@ const OptimusPy = (function () {
       toggleRow.appendChild(autoApplyLabel);
       leftCol.appendChild(toggleRow);
 
-      // Dimensions section
-      leftCol.appendChild(el("div", { className: "section-divider" }, "Dimensions"));
+      // Dimensions section — dimensions are listed in the cube's current storage
+      // order; the Refresh button re-fetches it (e.g. after applying an optimization).
+      const dimsHeader = el("div", { className: "section-divider flex items-center gap-2" });
+      dimsHeader.appendChild(document.createTextNode("Dimensions"));
+      const dimRefreshBtn = el("button", {
+        className: "btn btn-ghost btn-sm", style: "margin-left:auto",
+        title: "Re-fetch the current storage order from TM1 (use after applying an optimization run)",
+      }, el("span", { html: Icons.refresh }), "Refresh");
+      dimRefreshBtn.addEventListener("click", async () => {
+        delete state.cubeMetadata[this._cubeName];
+        IntelCache.clear(state.activeInstance, this._cubeName);
+        container.innerHTML = "";
+        try {
+          await this._renderConfigure(container);
+          Toast.success("Dimension order refreshed");
+        } catch (err) {
+          Toast.error("Refresh failed: " + err.message);
+        }
+      });
+      dimsHeader.appendChild(dimRefreshBtn);
+      leftCol.appendChild(dimsHeader);
 
       // Suggested order button — only shown in predefined mode
       const sugBtn = el("button", { className: "btn btn-secondary btn-sm mb-2" },
