@@ -289,3 +289,15 @@ def test_dimension_optimizer_resume_skips_completed_position(scripted):
     assert all(o[1] != "A" for o in log)
     # Position 2 (the only remaining candidate) was genuinely swept.
     assert [r.dimension_order.index("A") for r in results] == [2]
+
+
+def test_progress_label_one_indexed_and_optional_total():
+    # Label bug fix: 1-indexed (not "Iteration 0"), and no "of N" when the total
+    # is unknown (folds), which avoids the misleading "of 14" upper bound.
+    ex = _bare_executor()
+    ex.context.counter = 2  # state right after the original-order eval
+    assert ex._progress_label(True, None) == "Original Order"
+    assert ex._progress_label(False, None) == "Iteration 1"
+    assert ex._progress_label(False, 14) == "Iteration 1 of 14"
+    ex.context.counter = 5
+    assert ex._progress_label(False, None) == "Iteration 4"

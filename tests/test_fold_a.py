@@ -149,3 +149,30 @@ def test_fold_a_freezes_excluded_dim(scripted):
     # (b) Excl never appears anywhere other than its frozen slot -- i.e. it is
     # never the dim newly swept into a target position.
     assert all(o[0] == "Excl" for o in log)
+
+
+def test_fold_a_does_not_re_measure_the_occupant(scripted):
+    # The dim already sitting at a target position must NOT be re-swept into its
+    # own slot (a redundant no-op reorder that duplicates the current order in the
+    # report). Its "keep it here" value is carried by the current-order result.
+    from optimuspy.results import OptimusResult
+    from optimuspy.core import _deduplicate_results
+    dims = ["A", "B", "C", "M"]
+    card = {"A": 10, "B": 11, "C": 12, "M": 9}  # all within tau -> full frontiers
+    ex = make_main_executor(dims, card)
+    log = []
+    # Original order is uniquely lowest, so "keep" should win outright.
+    scripted(ex, lambda o: 90.0 if o == list(dims) else 100.0, log)
+    # Mirror production: core measures the original order once and hands it in.
+    ex._original_order_result = ex._evaluate_permutation(list(dims), is_original_order=True)
+    log.clear()
+    results = ex._run_fold_a()
+
+    # (a) The occupant is never re-measured -> the current order never reappears
+    #     as a redundant no-op reorder in the evaluated log.
+    assert list(dims) not in log
+    # (b) "Keep it here" is still available: the uniquely-lowest original order is
+    #     selected as best rather than being forced out.
+    unique = _deduplicate_results([ex._original_order_result], results)
+    best = OptimusResult("C", unique).best_result
+    assert list(best.dimension_order) == list(dims)

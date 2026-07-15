@@ -91,13 +91,18 @@ class OptipyzerExecutor:
             process_times_by_process[process_name] = execution_times
         return process_times_by_process
 
+    def _progress_label(self, is_original_order: bool, total_permutations) -> str:
+        # 1-indexed. Omit "of N" when the total is unknown (the folds prune the
+        # candidate set as they go, so no honest upfront total exists).
+        if is_original_order:
+            return "Original Order"
+        n = self.context.counter - 1
+        return f"Iteration {n} of {total_permutations}" if total_permutations else f"Iteration {n}"
+
     def _evaluate_permutation(self, permutation: List[str], retrieve_ram: bool = False,
                               is_original_order: bool = False,
                               total_permutations=None) -> PermutationResult:
-        if is_original_order:
-            progress_label = "Original Order"
-        else:
-            progress_label = f"Iteration {self.context.counter - 2} of {total_permutations}"
+        progress_label = self._progress_label(is_original_order, total_permutations)
 
         logging.info(f"{progress_label} - Testing order: {permutation}")
 
@@ -307,8 +312,13 @@ class MainExecutor(OptipyzerExecutor):
         if not self.measure_dimension_only_numeric:
             dimension_pool.remove(self.dimensions[-1])
             dimensions.remove(self.dimensions[-1])
-        total_permutations = sum(range(2, len(dimension_pool) + 1))
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
+
+        # Result representing the current resulting_order. It carries the "keep the
+        # dim already here" option into _pick_best, so the dim already sitting at a
+        # target position is never re-swept into its own slot (a redundant no-op
+        # reorder that would duplicate the current order in the report).
+        current_result = self._original_order_result
 
         placed_positions = []
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
@@ -317,6 +327,10 @@ class MainExecutor(OptipyzerExecutor):
             resulting_order = fs["resulting_order"]
             dimension_pool = fs["dimension_pool"]
             placed_positions = fs["placed_positions"]
+            current_result = next(
+                (r for r in reversed(self._resumed_results)
+                 if list(r.dimension_order) == list(resulting_order)),
+                self._original_order_result)
             logging.info(f"Resuming Fold A — {len(placed_positions)} positions already locked")
 
         for target_position in chain(*zip(reversed(range(len(dimensions))), range(len(dimensions)))):
@@ -332,7 +346,10 @@ class MainExecutor(OptipyzerExecutor):
             ranking = tau.ranking_for_position(target_position, mid, has_views, has_processes)
             tau_val = tau.tau_for_position(ranking)
             is_back = target_position > mid
-            candidates = tau.fold_a_candidates(unplaced, is_back, tau_val)
+            frontier = tau.fold_a_candidates(unplaced, is_back, tau_val)
+            # Skip the dim already at this position; its "keep" value is current_result.
+            occupant = resulting_order[target_position]
+            candidates = [c for c in frontier if c != occupant]
 
             def checkpoint_cb(dim, results, _pp=list(placed_positions)):
                 self._save_checkpoint(
@@ -345,15 +362,18 @@ class MainExecutor(OptipyzerExecutor):
                     }})
 
             results = self._sweep_into_position(
-                resulting_order, target_position, candidates, total_permutations,
+                resulting_order, target_position, candidates, None,
                 skip_candidate=self._string_last_skip,
                 skip_permutation=self._greedy_skip_permutation,
                 checkpoint_cb=checkpoint_cb)
             permutation_results.extend(results)
 
-            if results:
-                best = self._pick_best(results, ranking)
+            # Compare the swept alternatives against keeping the current order.
+            pool_for_best = results + ([current_result] if current_result is not None else [])
+            if pool_for_best:
+                best = self._pick_best(pool_for_best, ranking)
                 resulting_order = list(best.dimension_order)
+                current_result = best
                 dimension_pool.remove(resulting_order[target_position])
                 placed_positions.append(target_position)
 
@@ -438,7 +458,7 @@ class MainExecutor(OptipyzerExecutor):
                         }})
 
                 results = self._sweep_across_positions(
-                    resulting_order, dim, positions, total_permutations=len(positions),
+                    resulting_order, dim, positions, total_permutations=None,
                     skip_permutation=self._greedy_skip_permutation,
                     checkpoint_cb=checkpoint_cb)
                 permutation_results.extend(results)
