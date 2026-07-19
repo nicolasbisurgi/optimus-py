@@ -165,14 +165,18 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # Fold B coordinate descent. RAM is order-dependent and uniquely minimised by
     # [C, A, B, M] (every other order matches fewer target positions -> higher
     # RAM), so the descent converges there and it is the unambiguous best.
+    # "M" is a STRING dim, the sole reason a dim is locked last (CellPutS targets
+    # the last dimension); that keeps the seed [A, B, C, M] and holds M last
+    # throughout, without relying on the removed numeric-measure-last rule.
     dims = ["A", "B", "C", "M"]
     card = {"A": 100, "B": 110, "C": 120, "M": 3}
+    strings = ["M"]
     seed = ["A", "B", "C", "M"]
     target = ["C", "A", "B", "M"]
     ram_of = lambda o: 100.0 - sum(1 for i, d in enumerate(target) if list(o)[i] == d)
 
     # 1) uninterrupted reference
-    ref = make_main_executor(dims, card, fast=True)
+    ref = make_main_executor(dims, card, fast=True, string_dims=strings)
     ref_log = []
     scripted(ref, ram_of, ref_log)
     ref.context.set_initial_ram(ram_of(tuple(dims)))
@@ -185,7 +189,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # 2) crash during the FINAL pass (pass 0 fully completed). The checkpointed
     #    current_order is the optimum itself -> a faithful resume must accept no
     #    move from it.
-    ex = make_main_executor(dims, card, fast=True)
+    ex = make_main_executor(dims, card, fast=True, string_dims=strings)
     crash_log = []
     cm = _run_until_crash(ex, ram_of, 12, scripted, crash_log)
     with pytest.raises(OptimizationCancelled):
@@ -200,7 +204,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # 3) resume a fresh executor mirroring core. set_resume_context feeds
     #    _resumed_results, which _current_metric must consult so the restored
     #    current_order's metric is found (not float('inf')).
-    ex2 = make_main_executor(dims, card, fast=True)
+    ex2 = make_main_executor(dims, card, fast=True, string_dims=strings)
     resume_log = []
     scripted(ex2, ram_of, resume_log)
     ex2.context.set_initial_ram(ram_of(tuple(dims)))

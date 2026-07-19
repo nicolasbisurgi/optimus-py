@@ -2,7 +2,11 @@ from optimuspy.executors import MainExecutor
 from tests.test_fold_a import make_main_executor
 
 
-def test_fold_b_seeds_cardinality_ascending_with_measure_last(scripted):
+def test_fold_b_seeds_pure_cardinality_ascending_for_numeric_only(scripted):
+    # Numeric-only cube: NOTHING is forced last. A numeric measure has no TM1
+    # constraint, so the seed is pure cardinality ascending -- the smallest dim
+    # ("M", 3) leads and the largest ("Big", 50000) takes the last slot (90/10).
+    # (The old behaviour force-pinned dims[-1]="M" last; that rule is gone.)
     dims = ["Big", "Sm", "Md", "M"]
     card = {"Big": 50000, "Sm": 50, "Md": 300, "M": 3}
     ex = make_main_executor(dims, card, fast=True)
@@ -10,8 +14,8 @@ def test_fold_b_seeds_cardinality_ascending_with_measure_last(scripted):
     scripted(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
     ex._run_fold_b()
-    # first evaluated order is the seed: ascending cardinality, measure last
-    assert log[0] == ["Sm", "Md", "Big", "M"]
+    # first evaluated order is the seed: strictly ascending cardinality
+    assert log[0] == ["M", "Sm", "Md", "Big"]
     # every pairwise cardinality gap here is >= tau_ram (4x), so fold_b_refine_order
     # decides every dim (nothing undecided) -> the seed apply is the ONLY reorder.
     assert len(log) == 1
@@ -29,6 +33,12 @@ def test_fold_b_skips_pinned_dims_and_refines_only_undecided(scripted):
     # The real, reachable invariant is: Big is never the *target_dim* of a sweep
     # (fold_b_refine_order excludes it) — we verify that directly by spying on
     # _sweep_across_positions instead of inferring it from collateral positions.
+    #
+    # With the numeric-measure-last rule removed, the seed is pure cardinality
+    # ascending: [M, A, B, Big], so Big (largest) seeds into the LAST slot (3).
+    # Big dominates every other dim by >> tau, so its own allowed span is locked
+    # to that slot and no other dim's sweep (A/B spans are (1,2)) can reach it —
+    # Big stays last throughout.
     dims = ["A", "B", "Big", "M"]
     card = {"A": 180, "B": 205, "Big": 50000, "M": 3}  # A,B undecided; Big pinned
     ex = make_main_executor(dims, card, fast=True)
@@ -52,8 +62,9 @@ def test_fold_b_skips_pinned_dims_and_refines_only_undecided(scripted):
     assert "Big" not in swept_dims
     # Only the genuinely undecided dims (A, B) were ever swept.
     assert set(swept_dims) == {"A", "B"}
-    # first evaluated order is still the seed, with Big in its seeded slot.
-    assert log[0].index("Big") == 2
+    # seed is pure cardinality ascending -> Big (largest) seeds last, and stays
+    # last in every evaluated order (no sweep can reach its dominance-locked slot).
+    assert all(o.index("Big") == 3 for o in log)
 
 
 def test_fold_b_caps_at_k_passes(scripted, monkeypatch):
@@ -83,10 +94,11 @@ def test_fold_b_rejects_ties_and_stops_early_when_a_pass_improves_nothing(script
     scripted(ex, lambda o: 100.0, log)  # every permutation ties at the same RAM
     ex.context.set_initial_ram(100.0)
     ex._run_fold_b()
-    # seed(1) + one full pass over refine=[B,A]: B has 1 allowed position, A has 2.
+    # seed [M, A, B] (pure ascending) + one full pass over refine=[B,A]: from that
+    # seed B (idx 2) has 1 allowed position and A (idx 1) has 1 -> 2 sweeps.
     # If ties were wrongly accepted (`<=` instead of `<`), resulting_order would
     # keep "changing" and the loop would run the full 2 passes instead of 1.
-    assert len(log) == 4
+    assert len(log) == 3
 
 
 def test_fold_b_process_only_leaves_position_span_unpruned(scripted):
@@ -176,6 +188,39 @@ def test_fold_b_never_refines_string_dim_off_last(scripted):
     assert "D1" in swept_dims
     # S never leaves its seeded last slot in any evaluated order.
     assert all(o[-1] == "S" for o in log)
+
+
+def test_fold_b_back_positions_are_ram_ranked_even_with_views(scripted):
+    # ADR-0002 / 90/10 rule: the back/last positions are RAM-driven regardless of
+    # config. Even on a VIEWS cube (front = query-ranked), a move that improves
+    # query but REGRESSES RAM at a back position must be REJECTED.
+    #
+    # 5 dims, mid=2 -> positions 3,4 are the back half. d3 (8000) and d4 (9000) are
+    # within tau (undecided) so both are refined and can swap between slots 3 and 4;
+    # the three front dims are cardinality-separated (decided) and never refined.
+    # RAM rewards the largest dim (d4) in the last slot (seed); query rewards d4 one
+    # slot forward (index 3). Under the OLD global query-ranking, fold B accepted the
+    # query gain, regressed RAM, and ran a second pass (len(log)==5). Ranking the
+    # back half by RAM rejects the swap in pass 0 -> the descent stops (len(log)==3).
+    dims = ["d0", "d1", "d2", "d3", "d4"]
+    card = {"d0": 1, "d1": 15, "d2": 300, "d3": 8000, "d4": 9000}
+    ex = make_main_executor(dims, card, fast=True, view_names=["V"])
+    log = []
+    # RAM: better (lower) when the largest dim d4 holds the last slot.
+    ram_of = lambda o: 100.0 - (5.0 if list(o)[-1] == "d4" else 0.0)
+    # Query: better (lower) when d4 sits one slot forward (index 3).
+    query_of = lambda o: 1.0 - (0.5 if list(o)[3] == "d4" else 0.0)
+    scripted(ex, ram_of, log, query_of=query_of)
+    ex.context.set_initial_ram(ram_of(tuple(dims)))
+    ex._run_fold_b()
+
+    # seed has d4 last (RAM-optimal); it is never displaced for the query gain.
+    assert log[0] == ["d0", "d1", "d2", "d3", "d4"]
+    # The RAM-regressing swap is rejected in pass 0, so no second pass runs:
+    # seed(1) + one pass over refine=[d4, d3] (1 candidate position each) = 3.
+    # (Under the buggy query-ranking this would be 5: the swap is accepted and a
+    # second pass runs.)
+    assert len(log) == 3
 
 
 def test_fold_b_resume_skips_seed_and_completed_passes(scripted):

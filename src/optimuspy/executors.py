@@ -380,7 +380,16 @@ class MainExecutor(OptipyzerExecutor):
         return permutation_results
 
     def _seed_order(self):
-        """Cardinality-ascending seed with string/measure dims last.
+        """Cardinality-ascending seed with string dims last.
+
+        Only a *string*-bearing dimension is forced to the last slot — that is
+        TM1's sole storage-order constraint (CellPutS/string writes target the
+        last dimension, so a string dim cannot leave it). A numeric measure has
+        no such constraint and is placed purely by cardinality like any other
+        dimension: a small/degenerate measure belongs at the FRONT for RAM
+        (small-sparse first; the 90/10 rule reserves the last slot for the
+        largest-dense dim). This mirrors _compute_suggested_order, which likewise
+        locks only string dims last.
 
         Dimensions in dimensions_to_exclude are frozen at their original index;
         only the movable dims are re-ordered, into the movable positions.
@@ -392,10 +401,6 @@ class MainExecutor(OptipyzerExecutor):
         non_string = [d for d in movable if d not in self.string_dims]
         string_last = [d for d in movable if d in self.string_dims]
         non_string.sort(key=lambda d: self.cardinality.get(d, 0))
-        # keep the numeric measure last among the movable non-string dims
-        if self.measure_dimension_only_numeric and self.dimensions[-1] in non_string:
-            non_string.remove(self.dimensions[-1])
-            non_string.append(self.dimensions[-1])
         ordered_movable = non_string + string_last
         for pos, dim in zip(movable_positions, ordered_movable):
             result[pos] = dim
@@ -403,18 +408,23 @@ class MainExecutor(OptipyzerExecutor):
 
     def _run_fold_b(self, resume_state: dict = None) -> List[PermutationResult]:
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
+        # tau_split gates the refine SET (which dims are undecided); tau_span gates
+        # each dim's allowed position window. The ACCEPT metric, however, is chosen
+        # per dim by region below (ranking_for_position) rather than globally: the
+        # back/last positions are RAM-driven (the 90/10 rule) regardless of config,
+        # so a query-improving move that regresses RAM at the back is rejected.
+        # Mirrors fold A and ADR-0002 ("the back half is always RAM-ranked").
         if has_views:
             tau_split = tau_span = tau.TAU_QUERY
-            ranking = "query"
         elif has_processes:
-            tau_split, tau_span, ranking = tau.TAU_RAM, None, "process"
+            tau_split, tau_span = tau.TAU_RAM, None
         else:
             tau_split = tau_span = tau.TAU_RAM
-            ranking = "ram"
 
         resulting_order = self._seed_order()
         permutation_results = []
         last = len(resulting_order) - 1
+        mid = int(len(resulting_order) / 2)
         pinned_last = self.dimensions[-1] if not self.measure_dimension_only_numeric else None
 
         start_pass = 0
@@ -439,6 +449,9 @@ class MainExecutor(OptipyzerExecutor):
                                   if d in self.dimensions_to_exclude}
             for dim in refine:
                 current_idx = resulting_order.index(dim)
+                # Judge this dim's move by the metric that owns its region: RAM for
+                # the back/last half, query (views) or process for the front.
+                ranking = tau.ranking_for_position(current_idx, mid, has_views, has_processes)
                 lo, hi = tau.fold_b_allowed_span(
                     dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], tau_span)
                 positions = [p for p in range(lo, hi + 1)
