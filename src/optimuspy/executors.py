@@ -310,8 +310,22 @@ class MainExecutor(OptipyzerExecutor):
         dimension_pool = [d for d in self.dimensions if d not in self.dimensions_to_exclude]
         mid = int(len(dimension_pool) / 2)
         if not self.measure_dimension_only_numeric:
-            dimension_pool.remove(self.dimensions[-1])
-            dimensions.remove(self.dimensions[-1])
+            # Lock the string-bearing dim to the last slot using the authoritative
+            # string_dims set — NOT presentation-order [-1], which need not be the
+            # string dim on an already-optimized cube. Move it last if it isn't,
+            # then freeze it: never a swap candidate (out of the pool) and its slot
+            # is never a sweep target (out of the iterated range). Fall back to [-1]
+            # only if metadata flags no string dim while the measure is non-numeric.
+            # TM1 permits at most one such dim, but a list is handled defensively.
+            string_last = [d for d in self.dimensions if d in self.string_dims] or [self.dimensions[-1]]
+            for sd in string_last:
+                if sd in dimension_pool:
+                    dimension_pool.remove(sd)
+                if sd in dimensions:
+                    dimensions.remove(sd)
+                if resulting_order[-1] != sd:
+                    resulting_order.remove(sd)
+                    resulting_order.append(sd)
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
 
         # Result representing the current resulting_order. It carries the "keep the

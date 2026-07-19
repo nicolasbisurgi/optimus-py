@@ -81,6 +81,40 @@ def test_fold_a_measures_near_tied_cluster_in_full(scripted):
     assert placed_last_nonmeasure == {"A", "B", "C"}
 
 
+def test_fold_a_freezes_string_dim_last_even_when_not_presentation_last(scripted):
+    # Hardening (#2): Fold A must lock the *string* dim (authoritative
+    # self.string_dims) to the last slot, NOT presentation-order [-1]. Here the
+    # string dim "S" sits at presentation index 1 and the presentation-last dim
+    # "D" is numeric (an already-optimized cube whose build order != storage order).
+    # Before the fix, Fold A froze "D" and left "S" in the movable pool, sweeping it
+    # into non-last positions -> a CellPutS-breaking order. The fix moves "S" last
+    # and freezes it there.
+    dims = ["A", "S", "B", "C", "D"]
+    card = {"A": 100, "S": 50, "B": 110, "C": 120, "D": 130}
+    ex = make_main_executor(dims, card, string_dims=["S"], measure_only_numeric=False)
+    log = []
+    scripted(ex, lambda o: 100.0, log)  # ties -> exercise sweeps, no acceptance noise
+    ex.context.set_initial_ram(100.0)
+
+    swept = []
+    orig = ex._sweep_into_position
+
+    def spy(current_order, target_position, candidate_dims, *a, **k):
+        swept.extend(candidate_dims)
+        return orig(current_order, target_position, candidate_dims, *a, **k)
+
+    ex._sweep_into_position = spy
+    ex._run_fold_a()
+
+    assert log, "fold A evaluated nothing"
+    # The string dim is last in EVERY evaluated order (the TM1 CellPutS invariant).
+    assert all(o[-1] == "S" for o in log), \
+        f"string dim left the last slot: {[o for o in log if o[-1] != 'S']}"
+    # Refinement ran on the numeric dims, but "S" is frozen -> never a swap candidate.
+    assert swept and "S" not in swept
+    assert set(swept) <= {"A", "B", "C", "D"}
+
+
 def test_fold_a_query_front_uses_looser_tau(scripted):
     # With a view, front (query-ranked) positions prune with tau_query (10x), not
     # tau_ram (4x). dims = [A, B, C, M], card = {A:10, B:18, C:5000, M:3}; mid=2.
