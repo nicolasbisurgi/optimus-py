@@ -408,18 +408,16 @@ class MainExecutor(OptipyzerExecutor):
 
     def _run_fold_b(self, resume_state: dict = None) -> List[PermutationResult]:
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
-        # tau_split gates the refine SET (which dims are undecided); tau_span gates
-        # each dim's allowed position window. The ACCEPT metric, however, is chosen
-        # per dim by region below (ranking_for_position) rather than globally: the
-        # back/last positions are RAM-driven (the 90/10 rule) regardless of config,
-        # so a query-improving move that regresses RAM at the back is rejected.
+        # The refine SET uses one tau_split (a dim is "undecided"/worth refining if
+        # a neighbour is within it): looser on views cubes so query candidates
+        # survive, else RAM strength. The ACCEPT metric and the position SPAN, by
+        # contrast, are both chosen PER DIM by region below (ranking_for_position /
+        # tau_for_position): RAM strength on the back/last half (the 90/10 rule),
+        # looser query on the front (views), unpruned on process fronts. So a
+        # query-improving move that regresses RAM at the back is rejected, and a
+        # back dim's window is pruned tightly by RAM even when views are set.
         # Mirrors fold A and ADR-0002 ("the back half is always RAM-ranked").
-        if has_views:
-            tau_split = tau_span = tau.TAU_QUERY
-        elif has_processes:
-            tau_split, tau_span = tau.TAU_RAM, None
-        else:
-            tau_split = tau_span = tau.TAU_RAM
+        tau_split = tau.TAU_QUERY if has_views else tau.TAU_RAM
 
         resulting_order = self._seed_order()
         permutation_results = []
@@ -449,11 +447,15 @@ class MainExecutor(OptipyzerExecutor):
                                   if d in self.dimensions_to_exclude}
             for dim in refine:
                 current_idx = resulting_order.index(dim)
-                # Judge this dim's move by the metric that owns its region: RAM for
-                # the back/last half, query (views) or process for the front.
+                # Judge this dim's move — and prune its position window — by the
+                # metric that owns its region: RAM for the back/last half, query
+                # (views) or process for the front. tau_for_position returns None
+                # for process fronts (cardinality can't predict process time), so
+                # fold_b_allowed_span leaves those spans unpruned.
                 ranking = tau.ranking_for_position(current_idx, mid, has_views, has_processes)
+                span_tau = tau.tau_for_position(ranking)
                 lo, hi = tau.fold_b_allowed_span(
-                    dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], tau_span)
+                    dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], span_tau)
                 positions = [p for p in range(lo, hi + 1)
                              if p != current_idx
                              and not (p == last and dim in self.string_dims)
