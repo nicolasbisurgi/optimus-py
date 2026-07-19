@@ -421,9 +421,7 @@ class MainExecutor(OptipyzerExecutor):
 
         resulting_order = self._seed_order()
         permutation_results = []
-        last = len(resulting_order) - 1
         mid = int(len(resulting_order) / 2)
-        pinned_last = self.dimensions[-1] if not self.measure_dimension_only_numeric else None
 
         start_pass = 0
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
@@ -440,11 +438,15 @@ class MainExecutor(OptipyzerExecutor):
         for pass_index in range(start_pass, tau.FOLD_B_MAX_PASSES):
             improved = False
             ordered = [(d, self.cardinality.get(d, 0)) for d in resulting_order]
+            # A string-bearing dim is locked to its (seeded-last) slot — moving it
+            # off last breaks CellPutS — and an excluded dim is frozen. Neither is
+            # ever a refine target, and no other dim may be swept INTO their slots.
             refine = [d for d in tau.fold_b_refine_order(ordered, tau_split)
-                      if d != pinned_last and d not in self.string_dims
+                      if d not in self.string_dims
                       and d not in self.dimensions_to_exclude]
-            excluded_positions = {i for i, d in enumerate(resulting_order)
-                                  if d in self.dimensions_to_exclude}
+            reserved_positions = {i for i, d in enumerate(resulting_order)
+                                  if d in self.dimensions_to_exclude
+                                  or d in self.string_dims}
             for dim in refine:
                 current_idx = resulting_order.index(dim)
                 # Judge this dim's move — and prune its position window — by the
@@ -458,8 +460,7 @@ class MainExecutor(OptipyzerExecutor):
                     dim, [(d, self.cardinality.get(d, 0)) for d in resulting_order], span_tau)
                 positions = [p for p in range(lo, hi + 1)
                              if p != current_idx
-                             and not (p == last and dim in self.string_dims)
-                             and p not in excluded_positions]
+                             and p not in reserved_positions]
                 if not positions:
                     continue
 

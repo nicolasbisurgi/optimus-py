@@ -259,6 +259,32 @@ def test_fold_b_back_positions_are_ram_ranked_even_with_views(scripted):
     assert len(log) == 3
 
 
+def test_fold_b_never_evicts_string_measure_from_last_slot(scripted):
+    # The hard TM1 rule: a string-bearing dim must stay last (CellPutS targets the
+    # last dimension). A small string measure S plus two large, similar numeric
+    # dims (X=8000, Y=9000, undecided so both are refined) is the trigger: each
+    # large dim's RAM-span reaches the last slot (S is too small to defer them),
+    # and RAM ranking rewards a large dim last (90/10) -> a sweep would move X/Y
+    # into the last slot, evicting S. Reserving string-held positions forbids it.
+    dims = ["A", "B", "X", "Y", "S"]
+    card = {"A": 1, "B": 15, "X": 8000, "Y": 9000, "S": 50}
+    ex = make_main_executor(dims, card, fast=True, string_dims=["S"],
+                            measure_only_numeric=False)
+    log = []
+    # RAM rewards the largest dim last -> maximal pressure to evict the small S.
+    ram_of = lambda o: 100.0 - {"Y": 10.0, "X": 9.0}.get(list(o)[-1], 0.0)
+    scripted(ex, ram_of, log)
+    ex.context.set_initial_ram(ram_of(tuple(dims)))
+    ex._run_fold_b()
+
+    # S is seeded last and never leaves it in ANY evaluated order.
+    assert log[0][-1] == "S"
+    assert all(o[-1] == "S" for o in log), \
+        f"string measure evicted from last: {[o for o in log if o[-1] != 'S']}"
+    # The large numeric dims are still refined (they just cannot land on S's slot).
+    # X and Y remain movable among the non-reserved positions.
+
+
 def test_fold_b_resume_skips_seed_and_completed_passes(scripted):
     # On resume, _run_fold_b must NOT re-apply the seed (that % was already
     # anchored before checkpointing) and must resume from the checkpointed

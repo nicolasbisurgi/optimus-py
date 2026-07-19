@@ -191,7 +191,11 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     #    move from it.
     ex = make_main_executor(dims, card, fast=True, string_dims=strings)
     crash_log = []
-    cm = _run_until_crash(ex, ram_of, 12, scripted, crash_log)
+    # Crash on the 7th eval: the checkpoint captured (from eval 6) is the first
+    # pass-1 sweep, whose anchor is already the optimum -> pass_index==1, anchor==
+    # target. (Reserving the string dim's last slot narrows each numeric dim's
+    # candidate positions, so the whole descent is 9 evals; 7 lands in pass 1.)
+    cm = _run_until_crash(ex, ram_of, 7, scripted, crash_log)
     with pytest.raises(OptimizationCancelled):
         ex._run_fold_b()
     executor_state = cm.last["executor_state"]
