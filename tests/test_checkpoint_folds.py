@@ -8,8 +8,8 @@ from optimuspy.results import ExecutionContext, PermutationResult, OptimusResult
 from tests.test_fold_a import make_main_executor
 
 
-def test_checkpoint_version_is_two():
-    assert CHECKPOINT_VERSION == 2
+def test_checkpoint_version_is_three():
+    assert CHECKPOINT_VERSION == 3
 
 
 def test_fingerprint_changes_with_tau():
