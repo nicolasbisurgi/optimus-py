@@ -26,6 +26,9 @@ def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
     ex._resumed_results = []
     ex._original_order_result = None
     ex._initial_dimension_order = None
+    ex._reanchor_needed = False
+    ex._last_checkpoint = None
+    ex._recovered_results = {}
     return ex
 
 

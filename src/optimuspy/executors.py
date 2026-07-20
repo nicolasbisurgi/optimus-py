@@ -52,16 +52,61 @@ class OptipyzerExecutor:
         self._initial_dimension_order = None
         self._original_order_result = None
         self._resumed_results = []
+        # One-shot: the first evaluation after a resume takes an absolute RAM read
+        # to re-anchor the stale %-chain (set by set_resume_context).
+        self._reanchor_needed = False
+        # Snapshot of the last `received` checkpoint (completed results + executor
+        # state), so a `submitted` write can preserve it while adding pending.
+        self._last_checkpoint = None
+        # Level-2 recovered in-flight orders keyed by tuple(order); the evaluation
+        # paths inject these instead of re-applying the reorder.
+        self._recovered_results = {}
 
     def _check_cancelled(self):
         if self.cancel_event and self.cancel_event.is_set():
             raise OptimizationCancelled("Optimization cancelled by user")
 
-    def set_resume_context(self, initial_dimension_order, original_order_result, resumed_results):
-        """Set checkpoint resume context. Must be called before execute() when resuming."""
+    def set_resume_context(self, initial_dimension_order, original_order_result, resumed_results,
+                           resuming=True):
+        """Set checkpoint resume context. Called before execute() on every run.
+
+        `resuming` arms the one-shot RAM re-anchor: True only when actually
+        resuming a checkpoint (the %-chain anchor is stale then). On a fresh run
+        core passes resuming=False so the first iteration keeps the fast % method.
+        """
         self._initial_dimension_order = initial_dimension_order
         self._original_order_result = original_order_result
         self._resumed_results = resumed_results
+        self._reanchor_needed = resuming
+
+    def register_recovered(self, result):
+        """Record a Level-2 recovered in-flight order so it is never re-applied.
+
+        The order joins _resumed_results (so it appears in the merged report and
+        the checkpoint), and the evaluation paths inject its result instead of
+        re-sending the reorder. Recovery already took the one absolute RAM read,
+        so the first-eval re-anchor is disarmed here.
+        """
+        self._resumed_results.append(result)
+        self._recovered_results[tuple(result.dimension_order)] = result
+        self._reanchor_needed = False
+
+    def measure_recovered_landed(self, order, abs_ram, pct):
+        """Landed branch: run only the outstanding views/processes for `order`.
+
+        The reorder already landed before the drop, so it is not repeated. The
+        result carries the fresh absolute RAM (re-anchoring the %-chain) and the
+        back-calculated % for display.
+        """
+        query_times_by_view = self._determine_query_permutation_result()
+        process_times_by_process = None
+        if self.include_process:
+            process_times_by_process = self._determine_process_permutation_result()
+        return PermutationResult(
+            self.context, self.mode, self.cube_name, self.view_names, self.process_names,
+            list(order), query_times_by_view, process_times_by_process,
+            ram_usage=abs_ram, ram_percentage_change=pct, reorder_duration=0.0,
+            reanchor=True)
 
     def _determine_query_permutation_result(self) -> Dict[str, List[float]]:
         query_times_by_view = {}
@@ -106,6 +151,19 @@ class OptipyzerExecutor:
 
         logging.info(f"{progress_label} - Testing order: {permutation}")
 
+        # Mark this order `submitted` (v3 pending) before the reorder is sent, so a
+        # drop between the reorder and the received write leaves it recoverable.
+        if not is_original_order:
+            self._write_pending(permutation)
+
+        # First measurement after a resume: take one absolute read to re-anchor the
+        # stale %-chain, then fall back to the fast % method for every later order.
+        reanchor = False
+        if self._reanchor_needed and not is_original_order:
+            retrieve_ram = True
+            reanchor = True
+            self._reanchor_needed = False
+
         reorder_start = time.time()
         ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(self.cube_name, permutation)
         reorder_duration = time.time() - reorder_start
@@ -122,7 +180,7 @@ class OptipyzerExecutor:
         permutation_result = PermutationResult(
             self.context, self.mode, self.cube_name, self.view_names, self.process_names,
             permutation, query_times_by_view, process_times_by_process, ram_usage,
-            ram_percentage_change, reorder_duration)
+            ram_percentage_change, reorder_duration, reanchor=reanchor)
 
         query_log = ""
         if self.view_names:
@@ -156,13 +214,35 @@ class OptipyzerExecutor:
         if not success:
             raise RuntimeError(f"Failed to clear cache for cube '{self.cube_name}'. Status: '{status}'")
 
+    @staticmethod
+    def _dedup_results(results):
+        """Drop duplicate PermutationResults by permutation_id, preserving order.
+
+        A recovered in-flight order lives in both _resumed_results and a sweep's
+        results; deduping here keeps completed_results a clean set.
+        """
+        seen, unique = set(), []
+        for r in results:
+            if r.permutation_id in seen:
+                continue
+            seen.add(r.permutation_id)
+            unique.append(r)
+        return unique
+
     def _save_checkpoint(self, new_results, last_applied_order, executor_state=None):
         if not self.checkpoint_manager:
             return
         if not self._original_order_result or not self._initial_dimension_order:
             logging.warning("Checkpoint skipped — resume context not set (call set_resume_context first)")
             return
-        all_completed = self._resumed_results + new_results
+        # Snapshot this `received` state so a later `submitted` write can preserve
+        # it (same completed set + executor_state) while adding a pending order.
+        self._last_checkpoint = {
+            "new_results": list(new_results),
+            "last_applied_order": list(last_applied_order),
+            "executor_state": executor_state,
+        }
+        all_completed = self._dedup_results(self._resumed_results + new_results)
         self.checkpoint_manager.save(
             executor_type=self.__class__.__name__,
             execution_context=self.context,
@@ -170,7 +250,33 @@ class OptipyzerExecutor:
             last_applied_order=last_applied_order,
             original_order_result=self._original_order_result,
             completed_results=all_completed,
-            executor_state=executor_state)
+            executor_state=executor_state,
+            pending=None)
+
+    def _write_pending(self, permutation):
+        """Write a `submitted` checkpoint (pending set) before the reorder is sent.
+
+        Preserves the last `received` snapshot's completed_results and
+        executor_state so no progress is lost; only `pending` is added.
+        """
+        if not self.checkpoint_manager:
+            return
+        if not self._original_order_result or not self._initial_dimension_order:
+            return
+        snap = self._last_checkpoint
+        new_results = snap["new_results"] if snap else []
+        executor_state = snap["executor_state"] if snap else None
+        last_applied = snap["last_applied_order"] if snap else self._initial_dimension_order
+        all_completed = self._dedup_results(self._resumed_results + new_results)
+        self.checkpoint_manager.save(
+            executor_type=self.__class__.__name__,
+            execution_context=self.context,
+            initial_dimension_order=self._initial_dimension_order,
+            last_applied_order=last_applied,
+            original_order_result=self._original_order_result,
+            completed_results=all_completed,
+            executor_state=executor_state,
+            pending={"dimension_order": list(permutation)})
 
     def _sweep_into_position(self, current_order, target_position, candidate_dims,
                              total_permutations, skip_candidate=None,
@@ -186,6 +292,13 @@ class OptipyzerExecutor:
                 continue
             permutation = swap(current_order, target_position, current_order.index(dim))
             if skip_permutation and skip_permutation(permutation):
+                continue
+            recovered = self._recovered_results.get(tuple(permutation))
+            if recovered is not None:
+                # Injected, not re-applied — still competes in _pick_best.
+                results.append(recovered)
+                if checkpoint_cb:
+                    checkpoint_cb(dim, results)
                 continue
             self._check_cancelled()
             result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
@@ -205,6 +318,13 @@ class OptipyzerExecutor:
         for position in candidate_positions:
             permutation = swap(current_order, position, current_order.index(target_dim))
             if skip_permutation and skip_permutation(permutation):
+                continue
+            recovered = self._recovered_results.get(tuple(permutation))
+            if recovered is not None:
+                # Injected, not re-applied — still competes in _pick_best.
+                results.append(recovered)
+                if checkpoint_cb:
+                    checkpoint_cb(position, results)
                 continue
             self._check_cancelled()
             result = self._evaluate_permutation(permutation, total_permutations=total_permutations)
@@ -551,6 +671,19 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
 
         for idx, order in enumerate(self.predefined_orders):
             if idx in completed_indices:
+                continue
+
+            recovered = self._recovered_results.get(tuple(order))
+            if recovered is not None:
+                # Injected, not re-applied.
+                results.append(recovered)
+                completed_indices.add(idx)
+                self._save_checkpoint(
+                    new_results=results,
+                    last_applied_order=list(order),
+                    executor_state={
+                        "predefined_state": {"completed_indices": sorted(completed_indices)}
+                    })
                 continue
 
             self._check_cancelled()
