@@ -20,6 +20,7 @@ from optimuspy.executors import (OriginalOrderExecutor, MainExecutor, Predefined
                                  OptimizationCancelled)
 from optimuspy.metrics import (detect_is_v12, cube_memory_used_bytes, memory_by_cube_bytes,
                                ram_source_ready, read_cube_memory_bytes)
+from optimuspy.order_frame import OrderFrame
 from optimuspy.resume import recover, RecoveryEffects
 from optimuspy.results import ExecutionContext, OptimusResult
 
@@ -501,13 +502,19 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             else:
                 dimensions_metadata = _collect_dimension_metadata(tm1, initial_dimension_order)
                 cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}
-                string_dims = [d["name"] for d in dimensions_metadata if d["has_strings"]]
+                # The greedy is the only order source that honours the user
+                # preferences (decision 10), so it is the only frame built with them.
+                greedy_frame = OrderFrame(
+                    initial_dimension_order, last_slot_locked,
+                    dimensions_to_exclude=dimensions_to_exclude,
+                    orders_to_ignore=orders_to_ignore,
+                    position_rules=dimension_position_rules)
                 executor = MainExecutor(
                     tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
-                    last_slot_locked, context, fast, dimensions_to_exclude, orders_to_ignore,
+                    last_slot_locked, context, fast,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                    dimension_position_rules=dimension_position_rules, cancel_event=cancel_event,
-                    is_v12=is_v12, cardinality=cardinality, string_dims=string_dims)
+                    cancel_event=cancel_event,
+                    is_v12=is_v12, cardinality=cardinality, order_frame=greedy_frame)
 
             # Set resume context on executor (arm the RAM re-anchor only on a real resume)
             executor.set_resume_context(initial_dimension_order, original_order_result,
@@ -525,6 +532,12 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             # Execute (with resume state if available)
             new_results = executor.execute(resume_state=resume_state)
             permutation_results += new_results
+
+            if executor.skipped_orders:
+                breakdown = ", ".join(f"{count} {code}"
+                                      for code, count in sorted(executor.skipped_orders.items()))
+                logging.info(f"Skipped {sum(executor.skipped_orders.values())} candidate "
+                             f"orders for cube '{cube_name}' ({breakdown})")
 
             # Combine resumed + new results for final analysis
             unique_results = _deduplicate_results(

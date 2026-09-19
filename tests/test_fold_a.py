@@ -1,10 +1,12 @@
 from optimuspy.execution_mode import ExecutionMode
+from optimuspy.order_frame import OrderFrame
 from optimuspy.results import ExecutionContext
 from optimuspy.executors import MainExecutor
 
 
-def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
-                       view_names=None, process_names=None, last_slot_locked=False):
+def make_main_executor(dims, cardinality, *, fast=False,
+                       view_names=None, process_names=None, last_slot_locked=False,
+                       exclude=None, orders_to_ignore=None, position_rules=None):
     ex = object.__new__(MainExecutor)
     ex.context = ExecutionContext()
     ex.mode = ExecutionMode.ITERATIONS
@@ -13,16 +15,17 @@ def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
     ex.process_names = process_names or []
     ex.include_process = bool(ex.process_names)
     ex.dimensions = list(dims)
-    ex.cube_dim_number = len(dims)
     ex.executions = 1
     ex.last_slot_locked = last_slot_locked
     ex.fast = fast
-    ex.dimensions_to_exclude = []
-    ex.orders_to_ignore = []
-    ex.dimension_position_rules = []
     ex.cancel_event = ex.checkpoint_manager = None
     ex.cardinality = dict(cardinality)
-    ex.string_dims = set(string_dims or [])
+    ex.order_frame = OrderFrame(
+        dims, last_slot_locked,
+        dimensions_to_exclude=exclude,
+        orders_to_ignore=orders_to_ignore,
+        position_rules=position_rules)
+    ex.skipped_orders = {}
     ex._resumed_results = []
     ex._original_order_result = None
     ex._initial_dimension_order = None
@@ -32,19 +35,20 @@ def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
     return ex
 
 
-def test_main_executor_stores_cardinality_and_string_dims():
-    ex = make_main_executor(["A", "B"], {"A": 10, "B": 20}, string_dims=["B"])
+def test_main_executor_stores_cardinality_and_its_frame():
+    ex = make_main_executor(["A", "B"], {"A": 10, "B": 20}, last_slot_locked=True)
     assert ex.cardinality == {"A": 10, "B": 20}
-    assert ex.string_dims == {"B"}
+    assert ex.order_frame.locked_dimension == "B"
 
 
-def test_main_executor_constructor_accepts_cardinality_kwargs():
+def test_main_executor_constructor_accepts_cardinality_and_frame():
+    frame = OrderFrame(["A", "B"], True)
     ex = MainExecutor(
         tm1=None, cube_name="C", view_names=[], process_names=[],
-        dimensions=["A", "B"], executions=1, last_slot_locked=False,
-        context=ExecutionContext(), cardinality={"A": 10, "B": 20}, string_dims=["B"])
+        dimensions=["A", "B"], executions=1, last_slot_locked=True,
+        context=ExecutionContext(), cardinality={"A": 10, "B": 20}, order_frame=frame)
     assert ex.cardinality == {"A": 10, "B": 20}
-    assert ex.string_dims == {"B"}
+    assert ex.order_frame is frame
 
 
 def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(scripted):
@@ -84,17 +88,12 @@ def test_fold_a_measures_near_tied_cluster_in_full(scripted):
     assert placed_last_nonmeasure == {"A", "B", "C"}
 
 
-def test_fold_a_freezes_string_dim_last_even_when_not_presentation_last(scripted):
-    # Hardening (#2): Fold A must lock the *string* dim (authoritative
-    # self.string_dims) to the last slot, NOT presentation-order [-1]. Here the
-    # string dim "S" sits at presentation index 1 and the presentation-last dim
-    # "D" is numeric (an already-optimized cube whose build order != storage order).
-    # Before the fix, Fold A froze "D" and left "S" in the movable pool, sweeping it
-    # into non-last positions -> a CellPutS-breaking order. The fix moves "S" last
-    # and freezes it there.
-    dims = ["A", "S", "B", "C", "D"]
-    card = {"A": 100, "S": 50, "B": 110, "C": 120, "D": 130}
-    ex = make_main_executor(dims, card, string_dims=["S"], last_slot_locked=True)
+def test_fold_a_never_moves_the_locked_dimension(scripted):
+    # The storage-last dim carries string elements, so its slot is locked: no
+    # evaluated order may move it, and it is never a swap candidate.
+    dims = ["A", "S", "B", "C", "M"]
+    card = {"A": 100, "S": 50, "B": 110, "C": 120, "M": 130}
+    ex = make_main_executor(dims, card, last_slot_locked=True)
     log = []
     scripted(ex, lambda o: 100.0, log)  # ties -> exercise sweeps, no acceptance noise
     ex.context.set_initial_ram(100.0)
@@ -110,12 +109,40 @@ def test_fold_a_freezes_string_dim_last_even_when_not_presentation_last(scripted
     ex._run_fold_a()
 
     assert log, "fold A evaluated nothing"
-    # The string dim is last in EVERY evaluated order (the TM1 CellPutS invariant).
-    assert all(o[-1] == "S" for o in log), \
-        f"string dim left the last slot: {[o for o in log if o[-1] != 'S']}"
-    # Refinement ran on the numeric dims, but "S" is frozen -> never a swap candidate.
-    assert swept and "S" not in swept
-    assert set(swept) <= {"A", "B", "C", "D"}
+    assert all(o[-1] == "M" for o in log), \
+        f"locked dim left the last slot: {[o for o in log if o[-1] != 'M']}"
+    assert swept and "M" not in swept
+    assert set(swept) <= {"A", "S", "B", "C"}
+
+
+def test_fold_a_places_a_non_last_string_dim_by_cardinality(scripted):
+    # Dimensions are shared between cubes, so "S" can carry string elements from
+    # another cube's use while not being this cube's measure. The old code
+    # relocated EVERY string-bearing dim to the back; the locked-slot rule leaves
+    # this one movable, so it is swept like any other dimension and placed by
+    # cardinality. This is the one case where the old and new rules disagree.
+    dims = ["A", "S", "B", "C", "M"]
+    card = {"A": 100, "S": 50, "B": 110, "C": 120, "M": 130}
+    ex = make_main_executor(dims, card, last_slot_locked=True)
+    log = []
+    scripted(ex, lambda o: 100.0, log)
+    ex.context.set_initial_ram(100.0)
+
+    swept = []
+    orig = ex._sweep_into_position
+
+    def spy(current_order, target_position, candidate_dims, *a, **k):
+        swept.extend(candidate_dims)
+        return orig(current_order, target_position, candidate_dims, *a, **k)
+
+    ex._sweep_into_position = spy
+    ex._run_fold_a()
+
+    # "S" is a swap candidate — the old code would have frozen it at the back.
+    assert "S" in swept
+    # And it is genuinely evaluated somewhere other than where it started.
+    assert any(o.index("S") != dims.index("S") for o in log), \
+        "the non-last string dim was never moved"
 
 
 def test_fold_a_query_front_uses_looser_tau(scripted):

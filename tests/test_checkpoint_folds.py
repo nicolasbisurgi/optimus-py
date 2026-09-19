@@ -170,13 +170,12 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # throughout, without relying on the removed numeric-measure-last rule.
     dims = ["A", "B", "C", "M"]
     card = {"A": 100, "B": 110, "C": 120, "M": 3}
-    strings = ["M"]
     seed = ["A", "B", "C", "M"]
     target = ["C", "A", "B", "M"]
     ram_of = lambda o: 100.0 - sum(1 for i, d in enumerate(target) if list(o)[i] == d)
 
     # 1) uninterrupted reference
-    ref = make_main_executor(dims, card, fast=True, string_dims=strings)
+    ref = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     ref_log = []
     scripted(ref, ram_of, ref_log)
     ref.context.set_initial_ram(ram_of(tuple(dims)))
@@ -189,7 +188,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # 2) crash during the FINAL pass (pass 0 fully completed). The checkpointed
     #    current_order is the optimum itself -> a faithful resume must accept no
     #    move from it.
-    ex = make_main_executor(dims, card, fast=True, string_dims=strings)
+    ex = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     crash_log = []
     # Crash on the 7th eval: the checkpoint captured (from eval 6) is the first
     # pass-1 sweep, whose anchor is already the optimum -> pass_index==1, anchor==
@@ -208,7 +207,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # 3) resume a fresh executor mirroring core. set_resume_context feeds
     #    _resumed_results, which _current_metric must consult so the restored
     #    current_order's metric is found (not float('inf')).
-    ex2 = make_main_executor(dims, card, fast=True, string_dims=strings)
+    ex2 = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     resume_log = []
     scripted(ex2, ram_of, resume_log)
     ex2.context.set_initial_ram(ram_of(tuple(dims)))

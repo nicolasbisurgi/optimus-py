@@ -9,6 +9,7 @@ from TM1py import TM1Service, Process
 from optimuspy import tau
 from optimuspy.execution_mode import ExecutionMode
 from optimuspy.metrics import read_cube_memory_bytes
+from optimuspy.order_frame import REASON_NOT_A_PERMUTATION
 from optimuspy.results import ExecutionContext, PermutationResult
 
 
@@ -33,7 +34,7 @@ class OptipyzerExecutor:
                  storage_dimension_order: List[str],
                  executions: int, last_slot_locked: bool, context: ExecutionContext,
                  checkpoint_manager=None, process_parameters: dict = None, cancel_event=None,
-                 is_v12: bool = False):
+                 is_v12: bool = False, order_frame=None):
         self.tm1 = tm1
         self.cube_name = cube_name
         self.view_names = view_names
@@ -45,10 +46,13 @@ class OptipyzerExecutor:
         # True when the dimension in the last storage slot has string elements:
         # that slot is locked and its dimension never moves.
         self.last_slot_locked = last_slot_locked
+        # The one authority on which candidate orders are allowed (optimuspy.order_frame).
+        self.order_frame = order_frame
+        # Refusals by reason code, for the run summary.
+        self.skipped_orders = {}
         self.is_v12 = is_v12
         self.mode = None
         self.include_process = bool(process_names)
-        self.cube_dim_number = len(self.dimensions)
         self.context = context
         self.checkpoint_manager = checkpoint_manager
         self.process_parameters = process_parameters or {}
@@ -194,6 +198,23 @@ class OptipyzerExecutor:
         # RAM baseline in bytes via MetricService (cube_memory_used), version-agnostic.
         # v11 keeps the read-retry loop; v12 fails fast (see read_cube_memory_bytes).
         return read_cube_memory_bytes(self.tm1, self.cube_name, self.is_v12)
+
+    def _frame_refuses(self, permutation) -> bool:
+        """Ask the order frame whether this candidate may be evaluated.
+
+        Logs the reason at DEBUG and counts the refusal by code for the run
+        summary. A malformed order is a different animal — the greedy builds every
+        candidate by swapping within the cube's own dimensions, so one can only
+        mean a bug in the sweep, and skipping it silently would hide that.
+        """
+        verdict = self.order_frame.admits(permutation)
+        if verdict.admissible:
+            return False
+        if verdict.code == REASON_NOT_A_PERMUTATION:
+            raise RuntimeError(f"Generated an invalid candidate order: {verdict.reason}")
+        self.skipped_orders[verdict.code] = self.skipped_orders.get(verdict.code, 0) + 1
+        logging.debug(f"Skipping order — {verdict.reason}")
+        return True
 
     def _has_string_elements(self, dimension_name: str) -> bool:
         hierarchy_name = "Leaves" if self.tm1.hierarchies.exists(
@@ -361,57 +382,30 @@ class OriginalOrderExecutor(OptipyzerExecutor):
 
 
 class MainExecutor(OptipyzerExecutor):
+    """The greedy search: Fold A (place each position) or Fold B (refine a seed).
+
+    It is the only order source that honours the user preferences, and it does so
+    entirely through its order frame — dimensions_to_exclude, orders_to_ignore and
+    dimension_position_rules are the frame's, not the executor's. Keeping a second
+    copy here is how they came to be enforced seven different ways.
+    """
+
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int, last_slot_locked: bool,
                  context: ExecutionContext, fast: bool = False,
-                 dimensions_to_exclude: List[str] = None,
-                 orders_to_ignore: List[List[str]] = None,
                  checkpoint_manager=None, process_parameters: dict = None,
-                 dimension_position_rules: list = None, cancel_event=None, is_v12: bool = False,
-                 cardinality: Dict[str, int] = None, string_dims: List[str] = None):
+                 cancel_event=None, is_v12: bool = False,
+                 cardinality: Dict[str, int] = None, order_frame=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          last_slot_locked, context, checkpoint_manager, process_parameters,
-                         cancel_event, is_v12=is_v12)
+                         cancel_event, is_v12=is_v12, order_frame=order_frame)
         self.mode = ExecutionMode.ITERATIONS
         self.fast = fast
-        self.dimensions_to_exclude = dimensions_to_exclude or []
-        self.orders_to_ignore = orders_to_ignore or []
-        self.dimension_position_rules = dimension_position_rules or []
         self.cardinality = cardinality or {}
-        self.string_dims = set(string_dims or [])
-
-    def _violates_position_rules(self, permutation: List[str]) -> bool:
-        for rule in self.dimension_position_rules:
-            dim_name = rule['dimension']
-            pos = rule['position']
-            if dim_name not in permutation:
-                continue
-            actual_index = permutation.index(dim_name)
-            if pos == 'first' and actual_index == 0:
-                return True
-            elif pos == 'last' and actual_index == len(permutation) - 1:
-                return True
-            else:
-                try:
-                    if actual_index == int(pos) - 1:
-                        return True
-                except (ValueError, TypeError):
-                    pass
-        return False
-
-    def _string_last_skip(self, dim, target_position):
-        """Skip swapping a string-bearing dim into the last position (forced order)."""
-        last = target_position + 1 == self.cube_dim_number
-        return last and dim in self.string_dims
 
     def _greedy_skip_permutation(self, permutation):
-        if permutation in self.orders_to_ignore:
-            logging.debug(f"Skipping ignored order: {permutation}")
-            return True
-        if self._violates_position_rules(permutation):
-            logging.debug(f"Skipping order due to position rule violation: {permutation}")
-            return True
-        return False
+        """One call covers the lock, the ignored orders and the position rules."""
+        return self._frame_refuses(permutation)
 
     def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         if self.fast:
@@ -419,32 +413,14 @@ class MainExecutor(OptipyzerExecutor):
         return self._run_fold_a(resume_state)
 
     def _run_fold_a(self, resume_state: dict = None) -> List[PermutationResult]:
-        dimensions = self.dimensions[:]
         resulting_order = self.dimensions[:]
         permutation_results = []
-        dimension_pool = [d for d in self.dimensions if d not in self.dimensions_to_exclude]
+        # The frame decides what may move: everything except the excluded dims
+        # (frozen where they are) and the locked dim (which never moves at all).
+        # Nothing is relocated to satisfy the lock — a candidate that would move
+        # the locked dim is simply never generated, and would be refused anyway.
+        dimension_pool = self.order_frame.movable_dimensions()
         mid = int(len(dimension_pool) / 2)
-        if self.last_slot_locked:
-            # The storage-last dimension carries string elements, so its slot is
-            # locked: freeze that dim out of the swappable pool and out of the
-            # iterated position range, so it is never a swap candidate and its
-            # slot is never a sweep target.
-            #
-            # self.dimensions is now the STORAGE order, so self.dimensions[-1] is
-            # already the locked dimension. The string_dims lookup and the
-            # relocation it feeds are therefore a redundant second signal, left
-            # over from when this list was the presentation order; for a cube with
-            # one string dim the relocation branch cannot fire at all. Neither is
-            # load-bearing.
-            string_last = [d for d in self.dimensions if d in self.string_dims] or [self.dimensions[-1]]
-            for sd in string_last:
-                if sd in dimension_pool:
-                    dimension_pool.remove(sd)
-                if sd in dimensions:
-                    dimensions.remove(sd)
-                if resulting_order[-1] != sd:
-                    resulting_order.remove(sd)
-                    resulting_order.append(sd)
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
 
         # Result representing the current resulting_order. It carries the "keep the
@@ -466,12 +442,14 @@ class MainExecutor(OptipyzerExecutor):
                 self._original_order_result)
             logging.info(f"Resuming Fold A — {len(placed_positions)} positions already locked")
 
-        for target_position in chain(*zip(reversed(range(len(dimensions))), range(len(dimensions)))):
+        position_count = len(self.dimensions)
+        for target_position in chain(*zip(reversed(range(position_count)), range(position_count))):
             if target_position == mid:
                 break
             if target_position in placed_positions:
                 continue
-            # Positions held by an excluded (non-pool) dim are frozen — never sweep into them.
+            # Slots held by a dim that cannot move — an excluded one, or the locked
+            # one — are never a sweep target.
             if resulting_order[target_position] not in dimension_pool:
                 continue
 
@@ -496,7 +474,6 @@ class MainExecutor(OptipyzerExecutor):
 
             results = self._sweep_into_position(
                 resulting_order, target_position, candidates, None,
-                skip_candidate=self._string_last_skip,
                 skip_permutation=self._greedy_skip_permutation,
                 checkpoint_cb=checkpoint_cb)
             permutation_results.extend(results)
@@ -513,30 +490,32 @@ class MainExecutor(OptipyzerExecutor):
         return permutation_results
 
     def _seed_order(self):
-        """Cardinality-ascending seed with string dims last.
+        """Cardinality-ascending seed over the slots that are free to hold anything.
 
-        Only a *string*-bearing dimension is forced to the last slot — that is
-        TM1's sole storage-order constraint (CellPutS/string writes target the
-        last dimension, so a string dim cannot leave it). A numeric measure has
-        no such constraint and is placed purely by cardinality like any other
-        dimension: a small/degenerate measure belongs at the FRONT for RAM
-        (small-sparse first; the 90/10 rule reserves the last slot for the
-        largest-dense dim). This mirrors _compute_suggested_order, which likewise
-        locks only string dims last.
+        A numeric measure has no storage constraint and is placed purely by
+        cardinality like any other dimension: a small/degenerate measure belongs at
+        the FRONT for RAM (small-sparse first; the 90/10 rule reserves the last
+        slot for the largest-dense dim). Only the *locked* slot is special, and
+        only because TM1 rejects any write that moves the dimension out of it.
 
-        Dimensions in dimensions_to_exclude are frozen at their original index;
-        only the movable dims are re-ordered, into the movable positions.
+        Reserved slots keep whatever already sits in them — an excluded dim (frozen
+        where it is by user preference) and the locked dim (which never moves). The
+        rest are filled with the movable dims in ascending cardinality.
+
+        Note a string-bearing dimension that is NOT in the locked slot is movable
+        and is seeded by cardinality like anything else. Dimensions are shared
+        between cubes, so one can carry string elements from another cube's use
+        without being this cube's measure; the constraint is on the slot, not the
+        dimension.
         """
-        excluded = set(self.dimensions_to_exclude)
+        reserved = self.order_frame.reserved_positions()
+        free_positions = [i for i in range(len(self.dimensions)) if i not in reserved]
+        movable = sorted(self.order_frame.movable_dimensions(),
+                         key=lambda d: self.cardinality.get(d, 0))
+
         result = list(self.dimensions)
-        movable_positions = [i for i, d in enumerate(self.dimensions) if d not in excluded]
-        movable = [d for d in self.dimensions if d not in excluded]
-        non_string = [d for d in movable if d not in self.string_dims]
-        string_last = [d for d in movable if d in self.string_dims]
-        non_string.sort(key=lambda d: self.cardinality.get(d, 0))
-        ordered_movable = non_string + string_last
-        for pos, dim in zip(movable_positions, ordered_movable):
-            result[pos] = dim
+        for position, dim in zip(free_positions, movable):
+            result[position] = dim
         return result
 
     def _run_fold_b(self, resume_state: dict = None) -> List[PermutationResult]:
@@ -571,15 +550,14 @@ class MainExecutor(OptipyzerExecutor):
         for pass_index in range(start_pass, tau.FOLD_B_MAX_PASSES):
             improved = False
             ordered = [(d, self.cardinality.get(d, 0)) for d in resulting_order]
-            # A string-bearing dim is locked to its (seeded-last) slot — moving it
-            # off last breaks CellPutS — and an excluded dim is frozen. Neither is
-            # ever a refine target, and no other dim may be swept INTO their slots.
+            # The locked dim and the excluded dims are the ones that cannot move:
+            # neither is ever a refine target, and no other dim may be swept INTO
+            # their slots.
+            movable = set(self.order_frame.movable_dimensions())
             refine = [d for d in tau.fold_b_refine_order(ordered, tau_split)
-                      if d not in self.string_dims
-                      and d not in self.dimensions_to_exclude]
+                      if d in movable]
             reserved_positions = {i for i, d in enumerate(resulting_order)
-                                  if d in self.dimensions_to_exclude
-                                  or d in self.string_dims}
+                                  if d not in movable}
             for dim in refine:
                 current_idx = resulting_order.index(dim)
                 # Judge this dim's move — and prune its position window — by the

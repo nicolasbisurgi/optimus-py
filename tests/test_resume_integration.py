@@ -13,7 +13,9 @@ import pytest
 from optimuspy.checkpoint import CheckpointManager
 from optimuspy.core import _recover_pending_order
 from optimuspy.execution_mode import ExecutionMode
-from optimuspy.executors import MainExecutor, OriginalOrderExecutor, PredefinedOrderExecutor
+from optimuspy.executors import (MainExecutor, OriginalOrderExecutor,
+                                 PredefinedOrderExecutor)
+from optimuspy.order_frame import OrderFrame
 from optimuspy.results import ExecutionContext, OptimusResult
 
 
@@ -173,21 +175,23 @@ def test_predefined_resume_after_drop_completes_and_recovers(tmp_path):
 # --------------------------------------------------------------------------- #
 # Greedy Fold A — drop mid-fold, then resume; best is unchanged.
 # --------------------------------------------------------------------------- #
-def _fold_a_factory(dims, card, string_dims):
+def _fold_a_factory(dims, card, last_slot_locked):
+    frame = OrderFrame(dims, last_slot_locked)
+
     def factory(context, tm1, mgr):
         return MainExecutor(
-            tm1, "C", [], [], dims, 1, False, context, fast=False,
-            checkpoint_manager=mgr, cardinality=card, string_dims=string_dims)
+            tm1, "C", [], [], dims, 1, last_slot_locked, context, fast=False,
+            checkpoint_manager=mgr, cardinality=card, order_frame=frame)
     return factory
 
 
 def test_fold_a_resume_after_drop_matches_uninterrupted_best(tmp_path):
     dims = ["A", "B", "C", "D", "E", "M"]
     card = {"A": 100, "B": 105, "C": 110, "D": 115, "E": 120, "M": 3}
-    strings = ["M"]  # only a string dim is locked last
+    locked = True  # the storage-last dim "M" has string elements
     ram_of = (lambda o: 100.0 - 10 * list(o).index("E")
               + list(o).index("M") + 0.5 * list(o).index("A"))
-    factory = _fold_a_factory(dims, card, strings)
+    factory = _fold_a_factory(dims, card, locked)
 
     # 1) uninterrupted reference
     ctx = ExecutionContext()

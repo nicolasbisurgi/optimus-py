@@ -184,24 +184,20 @@ def test_fold_b_back_span_pruned_by_ram_tau_even_with_views(scripted):
     assert len(log) == 1
 
 
-def test_fold_b_never_refines_string_dim_off_last(scripted):
-    # Review fix: refine must exclude ALL string-bearing dims (decided-by-rule,
-    # seeded last), not just the pinned measure. Before the fix, a non-measure
-    # string dim that happens to be "undecided" by cardinality (within tau of
-    # some other dim) stayed in refine. Since the seed always places string dims
-    # last, and the span->positions filter forbids a string dim's OWN sweep from
-    # landing back on the last index, refining it necessarily moves it off the
-    # last slot with no way back -- violating the hard string-last TM1 rule.
+def test_fold_b_refines_a_non_last_string_dim_like_any_other(scripted):
+    # The fold B counterpart of the disagreement between the old and new rules.
+    # "S" carries string elements from another cube's use but is not this cube's
+    # measure, so it does not sit in the locked slot. The old rule excluded EVERY
+    # string-bearing dim from refine and seeded it last; the locked-slot rule
+    # leaves it movable, so it is refined and placed by cardinality like anything
+    # else. Only "M", in the locked slot, is untouchable.
     #
-    # "S" (card 120) is deliberately within tau of "D1" (card 100, 1.2x) so it is
-    # genuinely undecided -> a real trigger for the bug, not a decided/pinned dim
-    # that would be excluded anyway. "D2" (card 50000) dominates D1 by >>4x, which
-    # caps D1's own allowed span below the last index (index 3) -- so D1's sweep
-    # can never collaterally bump S off its seeded slot either, keeping the
-    # assertion clean.
+    # "S" (card 120) is within tau of "D1" (card 100, 1.2x) so it is genuinely
+    # undecided and a real refine candidate, not a decided dim that would be
+    # skipped anyway.
     dims = ["D1", "D2", "S", "M"]
     card = {"D1": 100, "D2": 50000, "S": 120, "M": 3}
-    ex = make_main_executor(dims, card, fast=True, string_dims=["S"])
+    ex = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     log = []
     scripted(ex, lambda o: 100.0, log)  # ties everywhere -> nothing ever accepted
     ex.context.set_initial_ram(100.0)
@@ -217,13 +213,14 @@ def test_fold_b_never_refines_string_dim_off_last(scripted):
 
     ex._run_fold_b()
 
-    # S is undecided (within tau of D1) yet must NEVER be the target dim a sweep
-    # repositions -- it is excluded from refine unconditionally as a string dim.
-    assert "S" not in swept_dims
-    # The genuinely undecided non-string dim (D1) was still refined normally.
+    # S is refined like any other undecided dim — the old rule forbade this.
+    assert "S" in swept_dims
+    # The genuinely undecided non-string dim is still refined normally.
     assert "D1" in swept_dims
-    # S never leaves its seeded last slot in any evaluated order.
-    assert all(o[-1] == "S" for o in log)
+    # The locked dim is never a refine target and never leaves the last slot.
+    assert "M" not in swept_dims
+    assert all(o[-1] == "M" for o in log), \
+        f"locked dim left the last slot: {[o for o in log if o[-1] != 'M']}"
 
 
 def test_fold_b_back_positions_are_ram_ranked_even_with_views(scripted):
@@ -268,8 +265,7 @@ def test_fold_b_never_evicts_string_measure_from_last_slot(scripted):
     # into the last slot, evicting S. Reserving string-held positions forbids it.
     dims = ["A", "B", "X", "Y", "S"]
     card = {"A": 1, "B": 15, "X": 8000, "Y": 9000, "S": 50}
-    ex = make_main_executor(dims, card, fast=True, string_dims=["S"],
-                            last_slot_locked=True)
+    ex = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     log = []
     # RAM rewards the largest dim last -> maximal pressure to evict the small S.
     ram_of = lambda o: 100.0 - {"Y": 10.0, "X": 9.0}.get(list(o)[-1], 0.0)
@@ -335,8 +331,7 @@ def test_fold_b_freezes_excluded_dim(scripted):
     #    the swept target_dim.
     dims = ["A", "Excl", "B", "M"]
     card = {"A": 100, "Excl": 90, "B": 110, "M": 3}
-    ex = make_main_executor(dims, card, fast=True)
-    ex.dimensions_to_exclude = ["Excl"]
+    ex = make_main_executor(dims, card, fast=True, exclude=["Excl"])
     log = []
     scripted(ex, lambda o: 100.0, log)  # ties everywhere -> nothing ever accepted
     ex.context.set_initial_ram(100.0)
