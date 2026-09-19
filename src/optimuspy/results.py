@@ -221,6 +221,36 @@ class PermutationResult:
         return instance
 
 
+def ram_signal_is_dead(results: List[PermutationResult]) -> bool:
+    """True when no measured order moved the RAM figure at all.
+
+    OptimusPy's only RAM measurement channel is the percentage
+    ``update_storage_dimension_order`` returns; every figure in the RAM column
+    except the anchor is derived from it. If every candidate came back 0% the
+    chain never moved and the column is one value repeated — fifteen
+    permutations that all "cost" exactly the same. A winner still comes out,
+    picked by whatever broke the tie, and without this nothing in the output
+    says the search had no RAM signal to go on.
+
+    Both conditions are tested, not just the percentages, because a resume
+    re-anchors the chain with an absolute read: such a run can show 0% on every
+    order and still carry two distinct RAM values. That is a different
+    situation and deliberately not reported as this one.
+
+    Equality is exact on purpose. ``update_ram(0)`` adds ``current_ram * 0``,
+    so a dead chain reproduces the anchor bit-for-bit; a tolerance here would
+    start folding in real-but-small differences.
+
+    Needs at least one candidate besides the original order — a run with
+    nothing to compare has an empty signal, not a dead one.
+    """
+    if len(results) < 2:
+        return False
+    if any(r.ram_percentage_change for r in results):
+        return False
+    return len({r.ram_usage for r in results}) == 1
+
+
 class OptimusResult:
     TEXT_FONT_SIZE = 5
 

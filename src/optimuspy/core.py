@@ -22,7 +22,7 @@ from optimuspy.metrics import (detect_is_v12, cube_memory_used_bytes, memory_by_
                                ram_source_ready, read_cube_memory_bytes)
 from optimuspy.order_frame import OrderFrame, REASON_NOT_A_PERMUTATION
 from optimuspy.resume import recover, RecoveryEffects
-from optimuspy.results import ExecutionContext, OptimusResult
+from optimuspy.results import ExecutionContext, OptimusResult, ram_signal_is_dead
 
 APP_NAME = "optimuspy"
 TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -656,6 +656,20 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             optimus_result = OptimusResult(cube_name, unique_results, instance_name=instance_name)
             best_permutation = optimus_result.best_result
             logging.info(f"Completed analysis for cube '{cube_name}'")
+
+            # Say it before the winner is announced, so the two are read together.
+            if ram_signal_is_dead(unique_results):
+                logging.warning(
+                    f"NO RAM SIGNAL for cube '{cube_name}': every order the server was "
+                    f"asked to apply came back 0.00%, so all {len(unique_results)} rows "
+                    f"report the same RAM and any RAM-ranked choice below was a "
+                    f"tie-break, not a measurement. Treat the RAM column and the "
+                    f"recommended order as unsupported.")
+                if is_v12:
+                    logging.warning(
+                        f"The usual cause on v12 is cube_memory_used still reporting the "
+                        f"pre-load skeleton for cube '{cube_name}'. Let the cube settle "
+                        f"after a large load and re-run.")
 
             if not best_permutation:
                 tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
