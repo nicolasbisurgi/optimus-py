@@ -425,13 +425,17 @@ class MainExecutor(OptipyzerExecutor):
         dimension_pool = [d for d in self.dimensions if d not in self.dimensions_to_exclude]
         mid = int(len(dimension_pool) / 2)
         if self.last_slot_locked:
-            # Lock the string-bearing dim to the last slot using the authoritative
-            # string_dims set — NOT presentation-order [-1], which need not be the
-            # string dim on an already-optimized cube. Move it last if it isn't,
-            # then freeze it: never a swap candidate (out of the pool) and its slot
-            # is never a sweep target (out of the iterated range). Fall back to [-1]
-            # only if metadata flags no string dim while the measure is non-numeric.
-            # TM1 permits at most one such dim, but a list is handled defensively.
+            # The storage-last dimension carries string elements, so its slot is
+            # locked: freeze that dim out of the swappable pool and out of the
+            # iterated position range, so it is never a swap candidate and its
+            # slot is never a sweep target.
+            #
+            # self.dimensions is now the STORAGE order, so self.dimensions[-1] is
+            # already the locked dimension. The string_dims lookup and the
+            # relocation it feeds are therefore a redundant second signal, left
+            # over from when this list was the presentation order; for a cube with
+            # one string dim the relocation branch cannot fire at all. Neither is
+            # load-bearing.
             string_last = [d for d in self.dimensions if d in self.string_dims] or [self.dimensions[-1]]
             for sd in string_last:
                 if sd in dimension_pool:
