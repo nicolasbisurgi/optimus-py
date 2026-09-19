@@ -32,6 +32,24 @@ _Avoid_: "size" (reserved-against for memory — ambiguous), "dimension size", "
 The ratio that decides whether the greedy will test *both* relative orderings of two dimensions. If one dimension's **cardinality** is ≥ τ× another's, theory decides the order (larger ⇒ sparser ⇒ later) and the reverse ordering is never tested; within τ the pair is *undecided* and both orderings are tested, because density — which OptimusPy cannot know in advance — may justify either. Larger τ ⇒ looser ⇒ more orderings tested. Applied full-strength at RAM-ranked positions, looser at query-ranked positions, and not at all at process-ranked positions (see `docs/adr/0002`). Pinning a dimension (e.g. a 50k-leaf dim to the back) is just the degenerate case where τ leaves it the only candidate for an end position.
 _Avoid_: "bucket" / "size band" — an earlier, lossier framing; dimensions do not fall into fixed cardinality bands, ordering is decided pairwise.
 
+### Instance-wide pass
+
+**heuristic pass** (UI: "Optimize DB", CLI: `optimize-db`):
+A single application of the cardinality heuristic to every cube in an instance, one cube at a time, under a wall-clock budget. Nothing is benchmarked: no permutation is tested and no query is timed. Its purpose is to get the whole model close to a good order cheaply, so that the *measured* search — `optimize` mode — can afterwards run against a smaller **RAM baseline**. Smallest-to-largest is not optimal, but it lands close on most cubes.
+_Avoid_: calling it "optimization" without qualification — that word is reserved for the measured greedy search, which carries evidence a heuristic pass does not.
+
+**plan**:
+The read-only output of `--dry-run`: the ordered cube queue, each cube's target order, every skip reason, the coverage figure, and the chores that were active when it was built. Contains no server writes and is the artifact an operator reviews before committing a weekend to the sweep.
+
+**run artifact**:
+The execution state written after every cube: per-cube status, original order (so a regression can be reverted), pre-reorder **RAM baseline**, the reported `%`, and the chore lifecycle state. It is the resume point, the final report, and — when the process dies with chores deactivated — the only record of which chores must be re-activated.
+
+**budget**:
+The wall-clock limit, checked *only between cubes*. A running `ReorderDimensions` is a blocking server-side rebuild with no safe abort, so a sweep overshoots by the duration of whatever cube it last started. The budget exists to stop the sweep running forever, not to guarantee an end time. The next cube's duration is extrapolated from observed throughput (median bytes/second over the last few cubes); no ETA is ever produced.
+
+**derived saving**:
+A per-cube `%` computed from absolute **cube_memory_used** reads instead of taken from `update_storage_dimension_order`'s return value. Only happens when a dropped connection loses the response: the reorder is atomic so the cube is at either the original or the target order, but the `%` is gone and is nowhere on the server. Tagged `derived` in the **run artifact** because it is a measurement, not the server's own arithmetic.
+
 ## Relationships
 
 - A **permutation** (storage dimension order) produces one **RAM baseline** reading via **cube_memory_used**

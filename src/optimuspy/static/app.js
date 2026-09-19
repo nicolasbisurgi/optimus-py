@@ -226,6 +226,16 @@ const OptimusPy = (function () {
     transferExport(instance, orders) {
       return this._fetch("POST", "/api/transfer/export", { instance, orders });
     },
+    optimizeDbPlan(instance, password, options) {
+      return this._fetch("POST", "/api/optimize-db/plan", Object.assign({ instance, password }, options));
+    },
+    optimizeDbRun(instance, password, options) {
+      return this._fetch("POST", "/api/optimize-db/run", Object.assign({ instance, password }, options));
+    },
+    optimizeDbRuns() { return this._fetch("POST", "/api/optimize-db/runs", {}); },
+    optimizeDbRestoreChores(instance, password, planId) {
+      return this._fetch("POST", "/api/optimize-db/restore-chores", { instance, password, plan_id: planId });
+    },
   };
 
   // ==================================================================
@@ -1600,7 +1610,7 @@ const OptimusPy = (function () {
       });
 
       // Update title
-      const titles = { home: "Optimize", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Sync Order" };
+      const titles = { home: "Optimize", nav: query.cube || "Navigation", results: "Results", jobs: "Jobs", settings: "Settings", transfer: "Sync Order", "optimize-db": "Optimize DB" };
       document.title = `OptimusPy — ${titles[pageName] || "Dashboard"}`;
 
       // Mount
@@ -3963,6 +3973,696 @@ const OptimusPy = (function () {
     unmount() {},
   };
 
+  // ==================================================================
+  // Page: Optimize DB — instance-wide heuristic dimension-order pass
+  // ==================================================================
+  // Skip reasons arrive as codes; these mirror SKIP_LABELS in optimize_db.py.
+  const OPTDB_SKIP_LABELS = {
+    excluded: "Excluded by instructions",
+    empty: "No memory in use",
+    below_min_ram: "Below minimum cube size",
+    too_few_dimensions: "Fewer than 3 dimensions",
+    string_elements: "Has string elements",
+    multiple_string_dims: "More than one dimension with strings",
+    already_in_target_order: "Already in target order",
+  };
+
+  const OPTDB_RUN_STATUS = {
+    running: "Running",
+    completed: "Completed",
+    stopped_time_limit: "Stopped — time limit",
+    cancelled: "Stopped — cancelled",
+    failed: "Failed",
+  };
+
+  function optdbGb(bytes) {
+    return ((bytes || 0) / 1073741824).toFixed(2) + " GB";
+  }
+
+  // Sweeps run for hours — the shared formatDuration only reaches minutes.
+  function optdbDuration(seconds) {
+    const total = Math.floor(seconds || 0);
+    if (total < 3600) return formatDuration(total);
+    return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+  }
+
+  const OptimizeDbPage = {
+    _instance: null,
+    _timeLimitHours: 8,
+    _order: "asc",
+    _minCubeMb: 10,
+    _stringPolicy: "skip_any",
+    _revertOnRegression: true,
+    _disableActiveChores: false,
+    _excludeCubes: [],
+
+    _plan: null,
+    _jobId: null,
+    _unsubStream: null,
+    _timer: null,
+    _timerStart: null,
+
+    mount() {
+      const page = $("#page-optimize-db");
+      page.innerHTML = "";
+      if (!this._instance) this._instance = state.activeInstance || state.instances[0] || null;
+
+      page.appendChild(el("div", { className: "page-header" },
+        el("h1", { className: "page-title" }, "Optimize DB"),
+        el("p", { className: "page-subtitle" },
+          "Apply the cardinality heuristic to every cube in an instance, one cube at a time, under a wall-clock budget"),
+      ));
+
+      page.appendChild(this._buildNotice());
+      page.appendChild(this._buildForm());
+
+      const planContainer = el("div", { id: "optdb-plan" });
+      this._renderPlan(planContainer);
+      page.appendChild(planContainer);
+
+      const progressContainer = el("div", { id: "optdb-progress" });
+      page.appendChild(progressContainer);
+
+      const recoveryContainer = el("div", { id: "optdb-recovery" });
+      page.appendChild(recoveryContainer);
+
+      if (this._jobId) {
+        this._renderProgress(progressContainer);
+      } else {
+        this._adoptActiveJob().then(jobId => {
+          // The lookup is async — do not attach a stream to a page the user left.
+          if (!jobId || !page.classList.contains("active")) return;
+          this._jobId = jobId;
+          this._renderProgress($("#optdb-progress") || progressContainer);
+        });
+      }
+      this._renderRecovery(recoveryContainer);
+    },
+
+    // ---- What this mode is, stated where the operator starts it ----
+    _buildNotice() {
+      const notice = el("div", { className: "optdb-notice mb-4" });
+      notice.appendChild(el("div", { className: "optdb-notice-title" },
+        el("span", { html: Icons.info }), "How this mode behaves"));
+      const list = el("ul", { className: "optdb-notice-list" });
+      [
+        "This is the heuristic pass, not the measured Optimize search. Every cube gets leaf-count-ascending order applied once — no permutation is benchmarked and nothing is timed against a view.",
+        "The time limit is checked only between cubes. A reorder already in flight is a blocking server-side rebuild with no safe abort, so the run can overshoot the limit by the duration of the cube it last started.",
+        "The reported saving is what the server returns per cube. Instance memory does not drop until TM1 is restarted.",
+        "Run it on a dedicated instance with no users on it, then restart TM1 before the real Optimize exercise.",
+      ].forEach(text => list.appendChild(el("li", null, text)));
+      notice.appendChild(list);
+      return notice;
+    },
+
+    // ---- Instructions form ----
+    _buildForm() {
+      const card = el("div", { className: "card mb-4" });
+      card.appendChild(el("div", { className: "card-title mb-4" }, "Instructions"));
+
+      const row1 = el("div", { className: "form-row-3" });
+
+      const instGroup = el("div", { className: "form-group" });
+      instGroup.appendChild(el("label", { className: "form-label", for: "optdb-instance" }, "Instance"));
+      const instSelect = el("select", { className: "form-input", id: "optdb-instance" });
+      instSelect.appendChild(el("option", { value: "" }, "Select instance..."));
+      state.instances.forEach(name => instSelect.appendChild(el("option", { value: name }, name)));
+      instSelect.value = this._instance || "";
+      instSelect.addEventListener("change", () => { this._instance = instSelect.value || null; });
+      instGroup.appendChild(instSelect);
+      row1.appendChild(instGroup);
+
+      const limitGroup = el("div", { className: "form-group" });
+      limitGroup.appendChild(el("label", { className: "form-label", for: "optdb-time-limit" }, "Time limit (hours)"));
+      const limitInput = el("input", {
+        type: "number", className: "form-input", id: "optdb-time-limit",
+        min: "0.25", step: "0.25", value: String(this._timeLimitHours),
+      });
+      limitInput.addEventListener("change", () => {
+        const value = parseFloat(limitInput.value);
+        this._timeLimitHours = isNaN(value) ? this._timeLimitHours : value;
+        limitInput.value = String(this._timeLimitHours);
+      });
+      limitGroup.appendChild(limitInput);
+      limitGroup.appendChild(el("div", { className: "form-hint" }, "Checked between cubes only — the last cube started always finishes"));
+      row1.appendChild(limitGroup);
+
+      const minGroup = el("div", { className: "form-group" });
+      minGroup.appendChild(el("label", { className: "form-label", for: "optdb-min-mb" }, "Minimum cube size (MB)"));
+      const minInput = el("input", {
+        type: "number", className: "form-input", id: "optdb-min-mb",
+        min: "0", step: "1", value: String(this._minCubeMb),
+      });
+      minInput.addEventListener("change", () => {
+        const value = parseFloat(minInput.value);
+        this._minCubeMb = isNaN(value) ? this._minCubeMb : value;
+        minInput.value = String(this._minCubeMb);
+      });
+      minGroup.appendChild(minInput);
+      minGroup.appendChild(el("div", { className: "form-hint" }, "Smaller cubes are skipped — the rebuild costs more than it saves"));
+      row1.appendChild(minGroup);
+      card.appendChild(row1);
+
+      const row2 = el("div", { className: "form-row-3" });
+
+      const orderGroup = el("div", { className: "form-group" });
+      orderGroup.appendChild(el("label", { className: "form-label", for: "optdb-order" }, "Cube order"));
+      const orderSelect = el("select", { className: "form-input", id: "optdb-order" },
+        el("option", { value: "asc" }, "Smallest → largest"),
+        el("option", { value: "desc" }, "Largest → smallest"),
+      );
+      orderSelect.value = this._order;
+      orderSelect.addEventListener("change", () => { this._order = orderSelect.value; });
+      orderGroup.appendChild(orderSelect);
+      orderGroup.appendChild(el("div", { className: "form-hint" }, "The order cubes are processed in — not the dimension order"));
+      row2.appendChild(orderGroup);
+
+      const policyGroup = el("div", { className: "form-group" });
+      policyGroup.appendChild(el("label", { className: "form-label", for: "optdb-string-policy" }, "String dimensions"));
+      const policySelect = el("select", { className: "form-input", id: "optdb-string-policy" },
+        el("option", { value: "skip_any" }, "Skip any cube with string elements"),
+        el("option", { value: "pin_last" }, "Pin the string dimension last"),
+      );
+      policySelect.value = this._stringPolicy;
+      policySelect.addEventListener("change", () => { this._stringPolicy = policySelect.value; });
+      policyGroup.appendChild(policySelect);
+      policyGroup.appendChild(el("div", { className: "form-hint" }, "Cubes with strings in more than one dimension are always skipped"));
+      row2.appendChild(policyGroup);
+
+      const flagsGroup = el("div", { className: "form-group" });
+      flagsGroup.appendChild(el("label", { className: "form-label" }, "Safety"));
+      const revertLabel = el("label", { className: "checkbox-label", style: "cursor:pointer;display:flex;align-items:center;gap:6px" });
+      const revertCb = el("input", { type: "checkbox" });
+      revertCb.checked = this._revertOnRegression;
+      revertCb.addEventListener("change", () => { this._revertOnRegression = revertCb.checked; });
+      revertLabel.appendChild(revertCb);
+      revertLabel.appendChild(el("span", { className: "text-sm" }, "Revert a cube that gets worse"));
+      flagsGroup.appendChild(revertLabel);
+      const choresLabel = el("label", { className: "checkbox-label", style: "cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:6px" });
+      const choresCb = el("input", { type: "checkbox" });
+      choresCb.checked = this._disableActiveChores;
+      choresCb.addEventListener("change", () => { this._disableActiveChores = choresCb.checked; });
+      choresLabel.appendChild(choresCb);
+      choresLabel.appendChild(el("span", { className: "text-sm" }, "Disable active chores for the run"));
+      flagsGroup.appendChild(choresLabel);
+      flagsGroup.appendChild(el("div", { className: "form-hint" }, "Chores are re-activated on every exit path; a killed process leaves them off"));
+      row2.appendChild(flagsGroup);
+      card.appendChild(row2);
+
+      card.appendChild(this._buildExcludeGroup());
+
+      const actions = el("div", { className: "flex gap-2 mt-4 items-center" });
+      const buildBtn = el("button", { className: "btn btn-secondary", id: "optdb-plan-btn" }, "Build plan");
+      buildBtn.addEventListener("click", () => this._buildPlan(buildBtn));
+      actions.appendChild(buildBtn);
+      const runBtn = el("button", { className: "btn btn-primary", id: "optdb-run-btn" }, "Run plan");
+      runBtn.disabled = !this._plan;
+      runBtn.addEventListener("click", () => this._runPlan(runBtn));
+      actions.appendChild(runBtn);
+      actions.appendChild(el("span", { className: "text-xs text-tertiary" },
+        "Building a plan is read-only. Running it rebuilds cubes on the server."));
+      card.appendChild(actions);
+
+      return card;
+    },
+
+    _buildExcludeGroup() {
+      const group = el("div", { className: "form-group" });
+      group.appendChild(el("label", { className: "form-label", for: "optdb-exclude-input" }, "Exclude cubes"));
+      const row = el("div", { className: "flex gap-2" });
+      const input = el("input", {
+        type: "text", className: "form-input", id: "optdb-exclude-input",
+        placeholder: "Cube name or pattern, e.g. Sales*",
+      });
+      const chips = el("div", { className: "optdb-chips mt-2" });
+      const add = () => {
+        const value = input.value.trim();
+        if (!value) return;
+        if (!this._excludeCubes.includes(value)) this._excludeCubes.push(value);
+        input.value = "";
+        this._renderChips(chips);
+      };
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); add(); }
+      });
+      row.appendChild(input);
+      row.appendChild(el("button", { className: "btn btn-secondary btn-sm", onClick: add },
+        el("span", { html: Icons.plus }), "Add"));
+      group.appendChild(row);
+      group.appendChild(el("div", { className: "form-hint" }, "Case-insensitive; * and ? wildcards are supported"));
+      this._renderChips(chips);
+      group.appendChild(chips);
+      return group;
+    },
+
+    _renderChips(container) {
+      container.innerHTML = "";
+      if (this._excludeCubes.length === 0) {
+        container.appendChild(el("span", { className: "text-xs text-tertiary" }, "No cubes excluded"));
+        return;
+      }
+      this._excludeCubes.forEach(name => {
+        const remove = el("button", {
+          className: "optdb-chip-remove", "aria-label": `Remove ${name}`, html: Icons.x,
+          onClick: () => {
+            this._excludeCubes = this._excludeCubes.filter(c => c !== name);
+            this._renderChips(container);
+          },
+        });
+        container.appendChild(el("span", { className: "optdb-chip" }, name, remove));
+      });
+    },
+
+    _instructions() {
+      return {
+        time_limit_hours: this._timeLimitHours,
+        order: this._order,
+        exclude_cubes: this._excludeCubes,
+        min_cube_mb: this._minCubeMb,
+        string_policy: this._stringPolicy,
+        revert_on_regression: this._revertOnRegression,
+        disable_active_chores: this._disableActiveChores,
+      };
+    },
+
+    _passwordFor(instance) {
+      return instance === state.activeInstance ? state.password : null;
+    },
+
+    // ---- Plan ----
+    async _buildPlan(btn) {
+      if (!this._instance) { Toast.error("Select an instance"); return; }
+      btn.disabled = true;
+      btn.textContent = "Building plan\u2026";
+      try {
+        const plan = await Api.optimizeDbPlan(this._instance, this._passwordFor(this._instance), this._instructions());
+        this._plan = plan;
+        this._renderPlan($("#optdb-plan"));
+        const runBtn = $("#optdb-run-btn");
+        if (runBtn) runBtn.disabled = false;
+        Toast.success(`Plan ready — ${(plan.cubes || []).length} cube(s) queued`);
+      } catch (err) {
+        Toast.error(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Build plan";
+      }
+    },
+
+    _renderPlan(container) {
+      if (!container) return;
+      container.innerHTML = "";
+      const plan = this._plan;
+      if (!plan) {
+        container.appendChild(el("div", { className: "empty-state" },
+          el("div", { className: "empty-state-title" }, "No plan yet"),
+          el("div", { className: "empty-state-text" },
+            "Build a plan to see which cubes would be reordered, in what order, and which are skipped. Planning reads the model only — nothing is written to the server."),
+        ));
+        return;
+      }
+
+      const cubes = plan.cubes || [];
+      const skipped = plan.skipped || [];
+
+      const stats = el("div", { className: "stat-cards" });
+      const stat = (label, value, hint) => stats.appendChild(el("div", { className: "stat-card" },
+        el("div", { className: "stat-card-label" }, label),
+        el("div", { className: "stat-card-value" }, value),
+        hint ? el("div", { className: "stat-card-hint" }, hint) : null,
+      ));
+      stat("Model RAM", optdbGb(plan.total_model_ram_bytes));
+      stat("Covered", optdbGb(plan.planned_ram_bytes), "RAM of the cubes in the queue");
+      stat("Coverage", (plan.coverage_pct || 0).toFixed(1) + "%", "Share of model RAM this pass touches");
+      stat("Cubes", String(cubes.length), `${skipped.length} skipped`);
+      container.appendChild(stats);
+
+      const queueCard = el("div", { className: "card mb-4" });
+      queueCard.appendChild(el("div", { className: "card-title mb-2" },
+        `Cube queue (${cubes.length})`));
+      queueCard.appendChild(el("div", { className: "text-sm text-secondary mb-2" },
+        `Plan ${plan.plan_id} — processed top to bottom, ${plan.options && plan.options.order === "desc" ? "largest first" : "smallest first"}.`));
+      if (cubes.length === 0) {
+        queueCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No cube qualifies — nothing would run."));
+      } else {
+        const rows = cubes.map((c, i) => Object.assign({ position: i + 1 }, c));
+        const tbl = createTable({
+          columns: [
+            { key: "position", label: "#", align: "right" },
+            { key: "cube", label: "Cube", render: r => el("span", { className: "font-medium" }, r.cube) },
+            { key: "ram_bytes", label: "RAM", align: "right", value: r => formatBytes(r.ram_bytes || 0), sortValue: r => r.ram_bytes || 0 },
+            {
+              key: "target_order", label: "Target order", sortable: false,
+              render: r => el("span", { className: "optdb-order" }, (r.target_order || []).join(" \u2192 ")),
+            },
+          ],
+          data: rows,
+        });
+        queueCard.appendChild(tbl.el);
+      }
+      container.appendChild(queueCard);
+
+      if (skipped.length > 0) container.appendChild(this._buildSkippedCard(skipped));
+      container.appendChild(this._buildChoresCard(plan));
+    },
+
+    _buildSkippedCard(skipped) {
+      const groups = {};
+      skipped.forEach(s => {
+        const reason = s.reason || "unknown";
+        (groups[reason] = groups[reason] || []).push(s);
+      });
+      const card = el("div", { className: "card mb-4" });
+      card.appendChild(el("div", { className: "card-title mb-2" }, `Skipped cubes (${skipped.length})`));
+      Object.keys(groups).sort().forEach(reason => {
+        const entries = groups[reason];
+        const group = el("div", { className: "optdb-skip-group" });
+        group.appendChild(el("div", { className: "optdb-skip-reason" },
+          el("span", null, OPTDB_SKIP_LABELS[reason] || reason),
+          el("span", { className: "badge badge-neutral" }, String(entries.length)),
+        ));
+        const chips = el("div", { className: "optdb-chips" });
+        entries.forEach(entry => chips.appendChild(el("span", { className: "optdb-chip" },
+          `${entry.cube} · ${formatBytes(entry.ram_bytes || 0)}`)));
+        group.appendChild(chips);
+        card.appendChild(group);
+      });
+      return card;
+    },
+
+    _buildChoresCard(plan) {
+      const chores = plan.active_chores || [];
+      const willDisable = !!(plan.options && plan.options.disable_active_chores);
+      const card = el("div", { className: "card mb-4" });
+      card.appendChild(el("div", { className: "card-title mb-2" }, `Active chores (${chores.length})`));
+      card.appendChild(el("div", { className: "text-sm text-secondary mb-2" }, willDisable
+        ? "These chores are deactivated when the run starts and re-activated on every exit path. If the process is killed they stay off — use the recovery list below."
+        : "These chores stay active during the run. Turn on 'Disable active chores' to deactivate exactly these for its duration."));
+      if (chores.length === 0) {
+        card.appendChild(el("div", { className: "text-secondary text-sm" }, "No chore is active on this instance."));
+      } else {
+        const chips = el("div", { className: "optdb-chips" });
+        chores.forEach(name => chips.appendChild(el("span", { className: "optdb-chip" }, name)));
+        card.appendChild(chips);
+      }
+      return card;
+    },
+
+    // ---- Run ----
+    _runPlan(btn) {
+      if (!this._instance) { Toast.error("Select an instance"); return; }
+      const cubeCount = this._plan ? (this._plan.cubes || []).length : 0;
+      Modal.confirm(
+        `Reorder ${cubeCount} cube(s) on '${this._instance}'? The plan is rebuilt from these instructions when the run starts, and each cube is rebuilt in place on the server.`,
+        async () => {
+          btn.disabled = true;
+          btn.textContent = "Starting\u2026";
+          try {
+            const resp = await Api.optimizeDbRun(this._instance, this._passwordFor(this._instance), this._instructions());
+            this._jobId = resp.job_id;
+            StreamManager.connect(resp.job_id);
+            this._renderProgress($("#optdb-progress"));
+            Sidebar.updateActivityMonitor();
+            Toast.success(`Optimize DB run started (${resp.job_id})`);
+          } catch (err) {
+            Toast.error(err.message);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "Run plan";
+          }
+        });
+    },
+
+    async _adoptActiveJob() {
+      try {
+        const data = await Api.getJobs();
+        const jobs = (data.jobs || []).filter(j => j.mode === "optimize-db");
+        const running = jobs.find(j => j.status === "running");
+        if (running) return running.job_id;
+        if (jobs.length > 0) return jobs[0].job_id;
+      } catch { /* no job history available */ }
+      return null;
+    },
+
+    _renderProgress(container) {
+      if (!container) return;
+      if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
+      this._stopTimer();
+      container.innerHTML = "";
+      if (!this._jobId) return;
+
+      const card = el("div", { className: "card mb-4" });
+      card.appendChild(el("div", { className: "card-title mb-2" }, "Run progress"));
+
+      const statusBar = el("div", { className: "terminal-status" });
+      const statusDot = el("span", { className: "status-dot" });
+      const statusText = el("span", { className: "text-sm font-medium" }, "Idle");
+      const timerEl = el("span", { className: "terminal-timer" }, "00:00");
+      const stopBtn = el("button", { className: "btn btn-danger btn-sm", style: "display:none;margin-left:auto" },
+        "Stop after current cube");
+      stopBtn.addEventListener("click", async () => {
+        stopBtn.disabled = true;
+        stopBtn.textContent = "Stopping\u2026";
+        try {
+          await Api.cancelJob(this._jobId);
+          Toast.info("Stopping — the cube in flight finishes first");
+        } catch (e) {
+          Toast.error("Cancel failed: " + e.message);
+          stopBtn.disabled = false;
+          stopBtn.textContent = "Stop after current cube";
+        }
+      });
+      statusBar.appendChild(statusDot);
+      statusBar.appendChild(statusText);
+      statusBar.appendChild(timerEl);
+      statusBar.appendChild(stopBtn);
+      card.appendChild(statusBar);
+
+      const terminal = el("div", { className: "terminal" });
+      card.appendChild(terminal);
+      const summary = el("div", { className: "mt-4" });
+      card.appendChild(summary);
+      container.appendChild(card);
+
+      const appendLog = (logData) => {
+        const line = el("div", { className: "terminal-line" });
+        const message = logData && logData.message != null ? logData.message : logData;
+        const text = typeof message === "string" ? message : JSON.stringify(message);
+        const level = logData && logData.level;
+        if (level === "ERROR" || level === "CRITICAL") {
+          line.innerHTML = `<span class="log-error">${escapeHtml(text)}</span>`;
+        } else if (level === "WARNING") {
+          line.innerHTML = `<span class="log-warning">${escapeHtml(text)}</span>`;
+        } else {
+          line.textContent = text;
+        }
+        terminal.appendChild(line);
+      };
+
+      StreamManager.getLogs(this._jobId).forEach(appendLog);
+      terminal.scrollTop = terminal.scrollHeight;
+
+      const sseStatus = StreamManager.getStatus(this._jobId);
+      if (sseStatus === "running" || sseStatus === "unknown") {
+        statusDot.classList.add("running");
+        statusText.textContent = "Running";
+        stopBtn.style.display = "";
+        this._startTimer(timerEl);
+        StreamManager.connect(this._jobId);
+      } else if (sseStatus === "completed") {
+        statusDot.classList.add("completed");
+        statusText.textContent = "Finished";
+      } else {
+        statusDot.classList.add("failed");
+        statusText.textContent = sseStatus === "cancelled" ? "Cancelled" : "Failed";
+      }
+
+      this._unsubStream = StreamManager.subscribe(this._jobId, (event, data) => {
+        if (event === "log") {
+          appendLog(data);
+          terminal.scrollTop = terminal.scrollHeight;
+          return;
+        }
+        stopBtn.style.display = "none";
+        this._stopTimer();
+        Sidebar.updateActivityMonitor();
+        if (event === "complete") {
+          const run = (data && data.run) || null;
+          const status = run && run.status;
+          // With no qualifying cube the core never opens a run and hands back
+          // the plan instead — a clean no-op, not a failure.
+          const nothingToRun = !!run && !status;
+          const ok = nothingToRun || !!(data && data.success);
+          statusDot.className = `status-dot ${ok ? "completed" : "failed"}`;
+          statusText.textContent = nothingToRun ? "Nothing to run" : (OPTDB_RUN_STATUS[status] || "Finished");
+          this._renderRunSummary(summary, run);
+          this._renderRecovery($("#optdb-recovery"));
+          if (nothingToRun) Toast.info("No cube qualified — nothing was reordered");
+          else if (data && data.success) Toast.success("Optimize DB pass finished — restart TM1 to realise the saving");
+          else Toast.warning(`Optimize DB pass ended: ${OPTDB_RUN_STATUS[status] || status || "unknown"}`);
+        } else if (event === "cancelled") {
+          statusDot.className = "status-dot failed";
+          statusText.textContent = "Cancelled";
+          Toast.info("Optimize DB run cancelled");
+        } else if (event === "error_event") {
+          statusDot.className = "status-dot failed";
+          statusText.textContent = "Failed";
+          this._renderRecovery($("#optdb-recovery"));
+          Toast.error("Optimize DB failed: " + ((data && data.error) || "Unknown error"));
+        }
+      });
+    },
+
+    _renderRunSummary(container, run) {
+      container.innerHTML = "";
+      if (!run) return;
+      if (!run.status) {
+        container.appendChild(el("div", { className: "text-sm text-secondary" },
+          "No cube qualified under these instructions — nothing was reordered."));
+        return;
+      }
+      const totals = run.totals || {};
+      const stats = el("div", { className: "stat-cards" });
+      const stat = (label, value, hint) => stats.appendChild(el("div", { className: "stat-card" },
+        el("div", { className: "stat-card-label" }, label),
+        el("div", { className: "stat-card-value" }, value),
+        hint ? el("div", { className: "stat-card-hint" }, hint) : null,
+      ));
+      stat("Outcome", OPTDB_RUN_STATUS[run.status] || run.status || "—", `Plan ${run.plan_id || "—"}`);
+      stat("Reordered", String(totals.cubes_reordered || 0),
+        `${totals.cubes_reverted || 0} reverted · ${totals.cubes_failed || 0} failed · ${totals.cubes_pending || 0} not reached`);
+      stat("Expected saving", formatBytes(totals.bytes_saved || 0), "Visible after a TM1 restart");
+      stat("Mean change", (totals.mean_pct_change || 0).toFixed(2) + "%", "Per reordered cube");
+      stat("Elapsed", optdbDuration(totals.elapsed_s || 0), `Limit ${(run.options && run.options.time_limit_hours) || "—"}h — checked between cubes only`);
+      container.appendChild(stats);
+
+      const chores = run.chores || {};
+      if (chores.state === "disabled") {
+        container.appendChild(this._buildChoreWarning({
+          plan_id: run.plan_id, instance: run.instance,
+        }));
+      } else if (chores.state === "restored") {
+        container.appendChild(el("div", { className: "text-sm text-secondary" },
+          `Re-activated ${(chores.deactivated || []).length} chore(s).`));
+      }
+    },
+
+    _startTimer(timerEl) {
+      this._timerStart = Date.now();
+      this._timer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - this._timerStart) / 1000);
+        const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
+        const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
+        const s = String(elapsed % 60).padStart(2, "0");
+        timerEl.textContent = `${h}:${m}:${s}`;
+      }, 1000);
+    },
+
+    _stopTimer() {
+      if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    },
+
+    // ---- Recovery ----
+    async _renderRecovery(container) {
+      if (!container) return;
+      container.innerHTML = "";
+      const card = el("div", { className: "card" });
+      const header = el("div", { className: "card-header" });
+      header.appendChild(el("div", { className: "card-title" }, "Previous runs"));
+      header.appendChild(el("button", {
+        className: "btn btn-ghost btn-sm",
+        onClick: () => this._renderRecovery(container),
+      }, el("span", { html: Icons.refresh }), "Refresh"));
+      card.appendChild(header);
+      const body = el("div");
+      body.appendChild(el("div", { className: "text-secondary text-sm" }, "Loading runs\u2026"));
+      card.appendChild(body);
+      container.appendChild(card);
+
+      let runs;
+      try {
+        const data = await Api.optimizeDbRuns();
+        runs = data.runs || [];
+      } catch (err) {
+        body.innerHTML = "";
+        body.appendChild(el("div", { className: "text-warning text-sm" }, "Could not load runs: " + err.message));
+        return;
+      }
+
+      body.innerHTML = "";
+      if (runs.length === 0) {
+        body.appendChild(el("div", { className: "text-secondary text-sm" },
+          "No Optimize DB run has been recorded yet."));
+        return;
+      }
+
+      runs.filter(r => r.chores_pending_restore)
+        .forEach(r => body.appendChild(this._buildChoreWarning(r, container)));
+
+      const tbl = createTable({
+        columns: [
+          {
+            key: "status", label: "Status", render: r => {
+              const cls = r.status === "completed" ? "badge-success"
+                : r.status === "running" ? "badge-info"
+                  : r.status === "stopped_time_limit" ? "badge-warning" : "badge-error";
+              return el("span", { className: `badge ${cls}` }, OPTDB_RUN_STATUS[r.status] || r.status || "—");
+            },
+          },
+          { key: "plan_id", label: "Plan", value: r => r.plan_id || "—" },
+          { key: "instance", label: "Instance", value: r => r.instance || "—" },
+          { key: "started_at", label: "Started", value: r => r.started_at ? formatDate(r.started_at) : "—" },
+          {
+            key: "cubes_done", label: "Cubes", align: "right",
+            value: r => `${r.cubes_done || 0} / ${r.cubes_total || 0}`,
+            sortValue: r => r.cubes_done || 0,
+          },
+          {
+            key: "chores_state", label: "Chores", render: r => r.chores_pending_restore
+              ? el("span", { className: "badge badge-warning" }, "disabled")
+              : el("span", { className: "text-xs text-tertiary" }, r.chores_state || "untouched"),
+          },
+        ],
+        data: runs,
+        filterable: false,
+      });
+      body.appendChild(tbl.el);
+    },
+
+    _buildChoreWarning(run, recoveryContainer) {
+      const banner = el("div", { className: "optdb-warning mb-2" });
+      banner.appendChild(el("span", { className: "optdb-warning-icon", html: Icons.alertTriangle }));
+      banner.appendChild(el("div", null,
+        el("div", { className: "font-semibold" }, "Chores still disabled"),
+        el("div", { className: "text-sm" },
+          `Run ${run.plan_id || "—"} on '${run.instance || "—"}' deactivated chores and never re-activated them. They stay off until restored.`),
+      ));
+      const btn = el("button", { className: "btn btn-primary btn-sm", style: "margin-left:auto;flex-shrink:0" },
+        "Re-enable chores");
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Re-enabling\u2026";
+        try {
+          const resp = await Api.optimizeDbRestoreChores(
+            run.instance, this._passwordFor(run.instance), run.plan_id);
+          Toast.success(`Re-activated ${(resp.restored || []).length} chore(s)`);
+          this._renderRecovery(recoveryContainer || $("#optdb-recovery"));
+        } catch (err) {
+          Toast.error(err.message);
+          btn.disabled = false;
+          btn.textContent = "Re-enable chores";
+        }
+      });
+      banner.appendChild(btn);
+      return banner;
+    },
+
+    unmount() {
+      if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
+      this._stopTimer();
+    },
+  };
+
   const SettingsPage = {
     mount() {
       const page = $("#page-settings");
@@ -4333,6 +5033,7 @@ const OptimusPy = (function () {
     Router.register("jobs", JobsPage);
     Router.register("settings", SettingsPage);
     Router.register("transfer", TransferPage);
+    Router.register("optimize-db", OptimizeDbPage);
 
     // Load initial data (non-blocking — app should load even if API calls fail)
     try { await Sidebar.loadInstances(); } catch { /* will show empty instance list */ }

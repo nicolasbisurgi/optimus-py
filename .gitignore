@@ -26,3 +26,8 @@ mkdocs_site/
 docs/superpowers/
 docs/plans/
 docs/*.docx
+
+# Local scratch (never intended for the repo)
+PLAN.md
+pending.txt
+logs/

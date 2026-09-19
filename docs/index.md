@@ -1,7 +1,7 @@
 <div class="optimus-banner" markdown>
 ## OptimusPy Documentation
 
-Benchmarks IBM TM1 / Planning Analytics dimension orders against query speed, RAM, and TI execution. Six modes, a local web UI, and an interactive HTML dashboard.
+Benchmarks IBM TM1 / Planning Analytics dimension orders against query speed, RAM, and TI execution. Seven modes, a local web UI, and an interactive HTML dashboard.
 
 Supported versions: TM1 v11 and v12 (PAoC/PAaaS).
 
@@ -36,7 +36,7 @@ Supported versions: TM1 v11 and v12 (PAoC/PAaaS).
 
     ---
 
-    Optimize, Set, Scan, Predefined, Position, Dimension — pick the right tool for the job.
+    Optimize, Set, Scan, Optimize DB, Predefined, Position, Dimension — pick the right tool for the job.
 
     [:octicons-arrow-right-24: Explore modes](modes/optimize-mode.md)
 

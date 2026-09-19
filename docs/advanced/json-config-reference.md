@@ -2,6 +2,9 @@
 
 Every field accepted by an OptimusPy cube config, with types, defaults, and validation rules.
 
+!!! note "Optimize DB uses a different schema"
+    This page covers the per-cube config used by `optimize` and `set`. The `optimize-db` verb takes instance-scoped **instructions** instead — `cube`, `views`, `executions` and `output` have no meaning for a whole-instance sweep. See [Optimize DB Mode](../modes/optimize-db.md).
+
 ## Required fields
 
 | Field | Type | Description |

@@ -168,9 +168,10 @@ v2.0 separates concerns:
 ### CLI modes
 
 ```bash
-optimuspy optimize config.json          # Benchmark and find best order
-optimuspy set config.json               # Apply an order directly
+optimuspy optimize config.json           # Benchmark and find best order
+optimuspy set config.json                # Apply an order directly
 optimuspy scan --instance tm1srv01       # Discover optimization candidates
+optimuspy optimize-db instructions.json  # Heuristic pass over a whole instance
 ```
 
 ### JSON config example
@@ -281,19 +282,21 @@ The blob is named `optimuspy_checkpoint_{cube}.json` and uses the same TM1 conne
 
 ## Feature Matrix
 
-| Feature | Greedy | Predefined | Position | Dimension | Set | Scan |
-|---------|:------:|:----------:|:--------:|:---------:|:---:|:----:|
-| Benchmarking | Yes | Yes | Yes | Yes | — | — |
-| Multi-view (optional) | Yes | Yes | Yes | Yes | — | — |
-| Multi-process (optional) | Yes | Yes | Yes | Yes | — | — |
-| Fast fold (`fast`) | Yes | — | — | — | — | — |
-| dimensions_to_exclude | Yes | — | Yes | — | — | — |
-| orders_to_ignore | Yes | — | — | — | — | — |
-| Checkpoint/Resume | Yes | Yes | Yes | Yes | — | — |
-| HTML report | Yes | Yes | Yes | Yes | — | — |
-| CSV/XLSX/PNG output | Yes | Yes | Yes | Yes | — | — |
-| Auto-apply best order | Yes | Yes | Yes | Yes | Yes | — |
-| Generate configs | — | — | — | — | — | Yes |
+| Feature | Greedy | Predefined | Position | Dimension | Set | Scan | Optimize DB |
+|---------|:------:|:----------:|:--------:|:---------:|:---:|:----:|:-----------:|
+| Benchmarking | Yes | Yes | Yes | Yes | — | — | — |
+| Multi-view (optional) | Yes | Yes | Yes | Yes | — | — | — |
+| Multi-process (optional) | Yes | Yes | Yes | Yes | — | — | — |
+| Fast fold (`fast`) | Yes | — | — | — | — | — | — |
+| dimensions_to_exclude | Yes | — | Yes | — | — | — | — |
+| orders_to_ignore | Yes | — | — | — | — | — | — |
+| Checkpoint/Resume | Yes | Yes | Yes | Yes | — | — | Yes |
+| HTML report | Yes | Yes | Yes | Yes | — | — | — |
+| CSV/XLSX/PNG output | Yes | Yes | Yes | Yes | — | — | — |
+| Auto-apply best order | Yes | Yes | Yes | Yes | Yes | — | — |
+| Applies the heuristic order | — | — | — | — | — | — | Yes |
+| Whole-instance scope | — | — | — | — | — | Yes | Yes |
+| Generate configs | — | — | — | — | — | Yes | — |
 
 ---
 

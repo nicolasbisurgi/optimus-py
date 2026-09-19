@@ -133,6 +133,7 @@ nav:
       - Optimize Mode: modes/optimize-mode.md
       - Set Mode: modes/set-mode.md
       - Scan Mode: modes/scan-mode.md
+      - Optimize DB Mode: modes/optimize-db.md
       - Predefined Orders: modes/predefined-orders.md
       - Position Optimization: modes/position-optimization.md
       - Dimension Optimization: modes/dimension-optimization.md

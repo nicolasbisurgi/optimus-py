@@ -46,6 +46,22 @@ You can use this public Google Sheet to construct the command prompt for the exe
 
 https://docs.google.com/spreadsheets/d/1dtgl9WkYcsyokWNdX29m4K_5oNm3MI3iTOH2f_g6Kd4/edit?usp=sharing
 
+## Modes
+
+| Mode | Purpose |
+|---|---|
+| `optimize` | Benchmark dimension orders for one cube and report the best one |
+| `set` | Apply a specific order to one cube without benchmarking |
+| `scan` | Discover candidate cubes in an instance, ranked by RAM |
+| `optimize-db` | Apply the cardinality heuristic to every cube in an instance under a time limit — nothing is benchmarked. Run it overnight on a dedicated instance, restart TM1, then run the real `optimize` exercise against a smaller footprint |
+
+```bash
+optimuspy optimize my_cube.json
+optimuspy set apply_sales.json
+optimuspy scan --instance tm1srv01
+optimuspy optimize-db instructions.json --dry-run
+```
+
 ## Config file (`--config`)
 
 Both the CLI (`optimuspy`) and the web UI (`python -m optimuspy.ui`) accept a `--config PATH` option pointing at a TM1 connection `config.ini`:

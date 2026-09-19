@@ -23,6 +23,7 @@ from urllib.parse import urlparse, unquote
 
 from TM1py import TM1Service
 
+from optimuspy.cli import tm1_connector
 from optimuspy.core import (
     get_tm1_config, validate_cube_config,
     main as run_optimuspy, _scan_to_data_light, APP_NAME, get_logfile_path, RESULT_PATH,
@@ -31,6 +32,9 @@ from optimuspy.core import (
 )
 from optimuspy.executors import OptimizationCancelled
 from optimuspy.metrics import detect_is_v12
+from optimuspy.optimize_db import (
+    list_runs, optimize_db, restore_chores_for_plan, validate_db_config
+)
 
 DEFAULT_PORT = 8765
 DEFAULT_CONFIG_INI = "config/config.ini"
@@ -290,6 +294,87 @@ class JobManager:
                 if self._active_job_id == job_id:
                     self._active_job_id = None
 
+    def start_optimize_db_job(self, instance: str, config: dict, password: str = None) -> str:
+        with self._lock:
+            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
+                raise RuntimeError("A job is already running")
+
+            job_id = str(uuid.uuid4())[:8]
+            progress_q = queue.Queue()
+            job = {
+                "job_id": job_id,
+                "status": "running",
+                "mode": "optimize-db",
+                "cube_name": "whole instance",
+                "instance": instance,
+                "progress_queue": progress_q,
+                "cancel_event": threading.Event(),
+                "tm1_holder": {},
+                "started_at": time.time(),
+                "completed_at": None,
+                "result_files": [],
+                "error": None,
+                "final_event": None,
+            }
+            self._jobs[job_id] = job
+            self._active_job_id = job_id
+
+            thread = threading.Thread(
+                target=self._run_optimize_db_job,
+                args=(job_id, instance, config, password),
+                daemon=True,
+            )
+            thread.start()
+            return job_id
+
+    def _run_optimize_db_job(self, job_id: str, instance: str, config: dict, password: str):
+        job = self._jobs[job_id]
+        handler = JobLogHandler(job["progress_queue"])
+        handler.setLevel(logging.INFO)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+
+        try:
+            connect = tm1_connector(_config_ini_path, instance, password)
+            run = optimize_db(connect, config=config,
+                              cancel_event=job["cancel_event"],
+                              tm1_holder=job["tm1_holder"])
+            # A cancelled sweep stops at the next cube boundary and still returns
+            # a complete run artifact — it is a partial result, not a failure.
+            run_status = run.get("status")
+            success = run_status in ("completed", "stopped_time_limit")
+            final_event = {
+                "event": "complete",
+                "data": {"success": success, "run": run}
+            }
+            with self._lock:
+                if run_status == "cancelled":
+                    job["status"] = "cancelled"
+                else:
+                    job["status"] = "completed" if success else "failed"
+                job["final_event"] = final_event
+            job["progress_queue"].put(final_event)
+
+        except Exception as e:
+            final_event = {
+                "event": "error_event",
+                "data": {"error": str(e)}
+            }
+            with self._lock:
+                job["status"] = "failed"
+                job["error"] = str(e)
+                job["final_event"] = final_event
+            job["progress_queue"].put(final_event)
+
+        finally:
+            with self._lock:
+                job["completed_at"] = time.time()
+            job["progress_queue"].put(None)  # Sentinel
+            root_logger.removeHandler(handler)
+            with self._lock:
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
     def cancel_job(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -455,6 +540,14 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._handle_transfer_apply(body)
         elif path == "/api/transfer/export":
             return self._handle_transfer_export(body)
+        elif path == "/api/optimize-db/plan":
+            return self._handle_optimize_db_plan(body)
+        elif path == "/api/optimize-db/run":
+            return self._handle_optimize_db_run(body)
+        elif path == "/api/optimize-db/runs":
+            return self._handle_optimize_db_runs()
+        elif path == "/api/optimize-db/restore-chores":
+            return self._handle_optimize_db_restore_chores(body)
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -1006,6 +1099,74 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"files": files})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
+
+    # Instruction fields the Optimize DB form can set; everything else in the
+    # request body (instance, password) is connection detail, not an option.
+    OPTIMIZE_DB_OPTION_KEYS = (
+        "time_limit_hours", "order", "exclude_cubes", "min_cube_mb", "string_policy",
+        "revert_on_regression", "disable_active_chores", "max_consecutive_failures",
+    )
+
+    def _optimize_db_config(self, body: dict) -> dict:
+        config = {"instance": body.get("instance")}
+        for key in self.OPTIMIZE_DB_OPTION_KEYS:
+            if key in body:
+                config[key] = body[key]
+        return config
+
+    def _handle_optimize_db_plan(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        config = self._optimize_db_config(body)
+        try:
+            validate_db_config(config)
+        except ValueError as e:
+            return self._send_json(400, {"error": str(e)})
+        try:
+            connect = tm1_connector(_config_ini_path, instance, password)
+            plan = optimize_db(connect, config=config, dry_run=True)
+            self._send_json(200, plan)
+        except Exception as e:
+            self._send_json(500, {"error": f"Plan failed: {e}"})
+
+    def _handle_optimize_db_run(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        if not instance:
+            return self._send_json(400, {"error": "Missing 'instance'"})
+        config = self._optimize_db_config(body)
+        try:
+            validate_db_config(config)
+        except ValueError as e:
+            return self._send_json(400, {"error": str(e)})
+        try:
+            job_id = job_manager.start_optimize_db_job(instance, config, password)
+            self._send_json(200, {"job_id": job_id, "status": "running"})
+        except RuntimeError as e:
+            self._send_json(409, {"error": str(e)})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_optimize_db_runs(self):
+        try:
+            self._send_json(200, {"runs": list_runs()})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_optimize_db_restore_chores(self, body: dict):
+        instance = body.get("instance")
+        password = body.get("password")
+        plan_id = body.get("plan_id")
+        if not instance or not plan_id:
+            return self._send_json(400, {"error": "Missing 'instance' or 'plan_id'"})
+        try:
+            connect = tm1_connector(_config_ini_path, instance, password)
+            restored = restore_chores_for_plan(connect, plan_id)
+            self._send_json(200, {"restored": restored})
+        except Exception as e:
+            self._send_json(500, {"error": f"Chore restore failed: {e}"})
 
     def _handle_list_results(self):
         results = []

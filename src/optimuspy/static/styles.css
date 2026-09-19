@@ -2942,3 +2942,108 @@ input[type="range"]:focus {
   color: var(--text-secondary, #b8b8b8);
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------------
+   Optimize DB page
+   ------------------------------------------------------------------ */
+.optdb-notice {
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.optdb-notice-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.optdb-notice-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: var(--font-size-sm);
+}
+
+.optdb-notice-list li {
+  margin-bottom: 4px;
+}
+
+.optdb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.optdb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--card-border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.optdb-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.optdb-chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.optdb-chip-remove:hover {
+  color: var(--text-primary);
+}
+
+.optdb-skip-group {
+  padding: 8px 0;
+  border-top: 1px solid var(--card-border);
+}
+
+.optdb-skip-reason {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.optdb-order {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.optdb-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--warning, #d9a441);
+  background: color-mix(in srgb, var(--warning, #d9a441) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.optdb-warning-icon {
+  display: inline-flex;
+  color: var(--warning, #d9a441);
+}

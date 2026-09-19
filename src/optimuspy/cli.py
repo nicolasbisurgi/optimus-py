@@ -16,6 +16,79 @@ from optimuspy.core import (
     set_current_directory,
     _execute_scan_mode,
 )
+from optimuspy.optimize_db import (
+    format_plan,
+    format_run_summary,
+    optimize_db,
+    read_json,
+    restore_chores_for_plan,
+)
+
+
+def tm1_connector(config_ini_path: str, instance: str, password: str = None):
+    """Return a zero-arg factory that opens a fresh TM1 service.
+
+    A factory rather than a service: `optimize-db` reconnects mid-run after a
+    dropped connection, so it needs to be able to build a new one.
+    """
+    config = get_tm1_config(config_ini_path)
+    if instance not in config:
+        raise ValueError(f"Instance '{instance}' not found in {config_ini_path}")
+    tm1_args = dict(config[instance])
+    tm1_args['session_context'] = APP_NAME
+    if password:
+        tm1_args['password'] = password
+        tm1_args['decode_b64'] = False
+    return lambda: TM1Service(**tm1_args)
+
+
+def _run_optimize_db(parser, cmd_args, config_ini_path: str) -> int:
+    if cmd_args.restore_chores_plan_id:
+        if not cmd_args.instance:
+            parser.error("--restore-chores requires --instance")
+        connect = tm1_connector(config_ini_path, cmd_args.instance, cmd_args.password)
+        restored = restore_chores_for_plan(connect, cmd_args.restore_chores_plan_id)
+        print(f"\n  Re-activated {len(restored)} chore(s)\n")
+        return 0
+
+    if cmd_args.resume_plan_id:
+        if not cmd_args.instance:
+            parser.error("--resume requires --instance")
+        connect = tm1_connector(config_ini_path, cmd_args.instance, cmd_args.password)
+        logging.info(f"Starting OptimusPy v2.0. Mode: optimize-db (resume "
+                     f"{cmd_args.resume_plan_id})")
+        run = optimize_db(connect, resume_plan_id=cmd_args.resume_plan_id)
+        print(format_run_summary(run))
+        return 0 if run.get("status") in ("completed", "stopped_time_limit") else 1
+
+    plan, config = None, None
+    if cmd_args.plan_path:
+        plan = read_json(cmd_args.plan_path)
+        instance = plan["instance"]
+    else:
+        if not cmd_args.cube_config:
+            parser.error("optimize-db mode requires an instructions JSON file "
+                         "(or --plan / --resume / --restore-chores)")
+        config = load_cube_config(cmd_args.cube_config)
+        instance = config.get("instance")
+        if not instance:
+            parser.error("optimize-db instructions must specify 'instance'")
+
+    logging.info(f"Starting OptimusPy v2.0. Mode: optimize-db, Instance: {instance}")
+    connect = tm1_connector(config_ini_path, instance, cmd_args.password)
+
+    try:
+        result = optimize_db(connect, config=config, plan=plan, dry_run=cmd_args.dry_run)
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    # A plan keeps its cubes as an ordered list; a run keys them by name.
+    if isinstance(result.get("cubes"), list):
+        print(format_plan(result))
+        return 0
+    print(format_run_summary(result))
+    return 0 if result.get("status") in ("completed", "stopped_time_limit") else 1
 
 
 def print_banner():
@@ -66,9 +139,10 @@ def main():
     configure_logging()
 
     parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
-    parser.add_argument('mode', choices=['optimize', 'set', 'scan'],
+    parser.add_argument('mode', choices=['optimize', 'set', 'scan', 'optimize-db'],
                         help="Run mode: 'optimize' benchmarks orders, 'set' applies a specific order, "
-                             "'scan' discovers optimization candidates")
+                             "'scan' discovers optimization candidates, 'optimize-db' applies the "
+                             "heuristic order to every cube in an instance under a time limit")
     parser.add_argument('cube_config', nargs='?', default=None,
                         help="Path to cube JSON configuration file (required for optimize/set)")
     parser.add_argument('--config', dest='config_ini', default=None,
@@ -87,6 +161,16 @@ def main():
                              "of total model RAM (scan only, default: 60)")
     parser.add_argument('--output', dest='output_dir', default=None,
                         help="Output directory for generated JSON config files (scan only)")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+                        help="Build and print the plan without touching the server (optimize-db only)")
+    parser.add_argument('--plan', dest='plan_path', default=None,
+                        help="Execute a plan file produced by --dry-run (optimize-db only)")
+    parser.add_argument('--resume', dest='resume_plan_id', default=None,
+                        help="Resume an interrupted run by plan id, against its original "
+                             "deadline (optimize-db only)")
+    parser.add_argument('--restore-chores', dest='restore_chores_plan_id', default=None,
+                        help="Re-activate the chores a crashed run left disabled, by plan id "
+                             "(optimize-db only)")
 
     cmd_args = parser.parse_args()
 
@@ -95,6 +179,13 @@ def main():
     except FileNotFoundError as e:
         print(f"ERROR: config.ini not found: {e}")
         sys.exit(1)
+
+    if cmd_args.mode == 'optimize-db':
+        try:
+            return _run_optimize_db(parser, cmd_args, config_location.path)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"ERROR: {e}")
+            return 1
 
     if cmd_args.mode == 'scan':
         if not cmd_args.instance:

@@ -650,21 +650,38 @@ def _compute_suggested_order(dimensions_metadata: list) -> dict:
     }
 
 
-def _collect_dimension_metadata(tm1: TM1Service, dimension_names: list) -> list:
+def _dimension_metadata(tm1: TM1Service, dim_name: str) -> dict:
+    """Collect one dimension's shape (leaf count, string flag, nibble depth).
+
+    Two API calls per dimension. Dimensions are shared across cubes, so any
+    instance-wide caller must memoize by dimension name (see
+    `_collect_dimension_metadata`'s `cache`) — re-reading a dimension once per
+    cube turns a one-minute sweep into a twenty-minute one.
+    """
+    leaf_count = tm1.elements.get_number_of_leaf_elements(
+        dimension_name=dim_name, hierarchy_name=dim_name)
+    string_count = tm1.elements.get_number_of_string_elements(
+        dimension_name=dim_name, hierarchy_name=dim_name)
+    return {
+        "name": dim_name,
+        "leaf_elements": leaf_count,
+        "has_strings": string_count > 0,
+        "string_elements": string_count,
+        "nibble_depth": _compute_nibble_depth(leaf_count),
+    }
+
+
+def _collect_dimension_metadata(tm1: TM1Service, dimension_names: list, cache: dict = None) -> list:
     """Collect per-dimension metadata (leaf count, string flag, nibble depth)."""
     dimensions_metadata = []
     for dim_name in dimension_names:
-        leaf_count = tm1.elements.get_number_of_leaf_elements(
-            dimension_name=dim_name, hierarchy_name=dim_name)
-        string_count = tm1.elements.get_number_of_string_elements(
-            dimension_name=dim_name, hierarchy_name=dim_name)
-        dimensions_metadata.append({
-            "name": dim_name,
-            "leaf_elements": leaf_count,
-            "has_strings": string_count > 0,
-            "string_elements": string_count,
-            "nibble_depth": _compute_nibble_depth(leaf_count),
-        })
+        if cache is not None and dim_name in cache:
+            dimensions_metadata.append(cache[dim_name])
+            continue
+        meta = _dimension_metadata(tm1, dim_name)
+        if cache is not None:
+            cache[dim_name] = meta
+        dimensions_metadata.append(meta)
     return dimensions_metadata
 
 

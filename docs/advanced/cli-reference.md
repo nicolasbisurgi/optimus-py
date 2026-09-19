@@ -13,6 +13,7 @@ optimuspy <mode> <cube_config.json> [options]
 | `optimize` | Benchmark dimension orders (greedy / predefined / position / dimension) |
 | `set` | Apply a specific order without benchmarking |
 | `scan` | Discover candidate cubes in an instance |
+| `optimize-db` | Apply the heuristic order to every cube in an instance under a time limit |
 
 ## Global options
 
@@ -20,7 +21,7 @@ optimuspy <mode> <cube_config.json> [options]
 |---|---|---|
 | `--config <path>` | `config/config.ini` | Path to TM1 connection config |
 | `-p <password>` | (from config.ini) | Override password for the active instance |
-| `--no-resume` | (off) | Ignore any existing checkpoint and start fresh |
+| `--no-resume` | (off) | Ignore any existing checkpoint and start fresh (`optimize` mode; unrelated to `optimize-db --resume`) |
 
 ## `optimize` mode
 
@@ -61,6 +62,30 @@ optimuspy scan --instance tm1srv01 --include-optimized
 | `--output <dir>` | Generate one JSON config per candidate cube into this directory. |
 | `--include-optimized` | Show cubes that already have a custom storage order. |
 | `--ram-percent <int>` | RAM threshold (default 60). Cubes accounting for up to this % of total model RAM are listed. |
+
+## `optimize-db` mode
+
+```bash
+optimuspy optimize-db instructions.json --dry-run
+optimuspy optimize-db instructions.json
+optimuspy optimize-db --plan results/tm1srv01/optdb_plan_tm1srv01_2026-09-18_22-00-00.json
+optimuspy optimize-db --resume tm1srv01_2026-09-18_22-00-00 --instance tm1srv01
+optimuspy optimize-db --restore-chores tm1srv01_2026-09-18_22-00-00 --instance tm1srv01
+```
+
+Instance-scoped: the instructions JSON is **not** the cube config schema. Nothing is benchmarked — every cube gets the cardinality heuristic applied once, one cube at a time, until the time limit is reached.
+
+| Option | Description |
+|---|---|
+| `--dry-run` | Build and print the plan without touching the server. Writes the plan artifact only. |
+| `--plan <path>` | Execute a plan file produced by an earlier run instead of building one from instructions. |
+| `--resume <plan-id>` | Continue an interrupted run against its **original** deadline. Requires `--instance`. |
+| `--restore-chores <plan-id>` | Re-activate the chores a crashed run left disabled — exactly the set that run recorded in its run artifact, not the plan's snapshot. Requires `--instance`. |
+| `--instance <name>` | Section name in `config.ini`. Required by `--resume` and `--restore-chores`, which have no instructions file to read it from; taken from the instructions or the plan otherwise. |
+
+Exit code is `0` when the run completed or stopped on the time limit, `1` otherwise.
+
+[Full details → Optimize DB Mode](../modes/optimize-db.md)
 
 ## Module mode
 

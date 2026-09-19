@@ -2,6 +2,9 @@
 
 OptimusPy persists progress mid-run so a crash, network blip, or `Ctrl+C` doesn't lose hours of benchmarking work.
 
+!!! note "Optimize DB resumes differently"
+    This page describes the per-cube benchmark checkpoint used by `optimize`. The `optimize-db` sweep has no checkpoint file — its run artifact is the resume point, and `--resume` continues against the original deadline. See [Optimize DB Mode](../modes/optimize-db.md).
+
 ## When checkpoints are written
 
 A checkpoint is written **before every reorder** (marking that order `submitted`)
