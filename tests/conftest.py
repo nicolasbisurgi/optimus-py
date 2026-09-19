@@ -69,13 +69,29 @@ def tm1_connection_args(live_instance, tm1_config_path):
 
 
 @pytest.fixture(scope="session")
-def tm1(tm1_connection_args):
-    """A real TM1Service. No fake stands in for this — the test skips instead."""
+def tm1(live_instance, tm1_connection_args):
+    """A real TM1Service. No fake ever stands in for this.
+
+    A server that cannot be reached SKIPS: the machine simply has no route to it,
+    which is not a claim about the code. A server that answers and REFUSES us
+    FAILS: an expired credential is a configuration error someone has to fix, and
+    skipping it makes a run that tested nothing look exactly like a run on a
+    laptop with no TM1 access. That difference matters here more than usual —
+    these tests are the justification for coverage that left CI, so "10 skipped"
+    must never be the way a stale password reports itself.
+    """
     from TM1py import TM1Service
 
     try:
         service = TM1Service(**tm1_connection_args)
-    except Exception as e:  # unreachable host, bad credentials, TLS…
+    except Exception as e:
+        status = getattr(e, "status_code", None)
+        if status in (401, 403):
+            pytest.fail(
+                f"TM1 refused the credentials for [{live_instance}] (HTTP {status}). "
+                f"The server answered, so this is a config.ini problem, not an "
+                f"unreachable host — refresh the credentials and re-run. {e}",
+                pytrace=False)
         pytest.skip(f"cannot reach TM1: {e}")
     with service:
         yield service
