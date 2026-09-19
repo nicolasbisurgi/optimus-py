@@ -36,10 +36,17 @@ _V11_RETRY_WAIT_SECONDS = 15
 # v12 stabilization: cube_memory_used is a sampled gauge that lags right after a
 # data change — it can report a too-small value before catching up. We can't know
 # the cube's true size in advance, so we poll until the value plateaus (a re-read
-# no longer materially larger than the largest seen). On a settled, resident cube
-# the second read confirms the first and this returns immediately; only just after
-# a bulk load does it wait. The winner is derived from %-deltas and is correct
-# regardless, so if it never fully settles we return the largest sample seen.
+# no longer materially larger than the largest seen).
+#
+# What this catches, and what it does NOT. It catches a gauge still RISING while
+# we watch it. It cannot catch a gauge FLAT AT THE WRONG VALUE: two equal reads
+# are the same observation whether the cube has settled at its true size or the
+# gauge is stuck on the pre-load skeleton, and the loop returns on the second
+# read either way. It also gives up after ATTEMPTS x WAIT_SECONDS, and a gauge
+# has been observed taking about five minutes to catch up with a 300k-cell load
+# — longer than that window even while still rising. So a run started right
+# after a bulk load can measure the skeleton, and this function will not say so.
+# ram_signal_is_dead() in results.py is the check that notices afterwards.
 _V12_STABILIZE_ATTEMPTS = 6
 _V12_STABILIZE_WAIT_SECONDS = 10
 _V12_STABILIZE_TOLERANCE = 0.01  # 1% — a read within this of the max is "plateaued"
@@ -113,8 +120,8 @@ def read_cube_memory_bytes(tm1, cube_name: str, is_v12: bool) -> float:
     v11: retry the read (the Performance Monitor populates on an interval), then
     fail with the historical "Performance Monitor must be activated" message.
     v12: an absent metric is a hard error, but a present value is read until it
-    plateaus — the gauge can lag right after a data change (see the stabilization
-    note above), so we wait for it to settle rather than trust the first sample.
+    plateaus. A plateau is weaker evidence than it sounds — see the stabilization
+    note above for what that does and does not rule out.
     """
     if is_v12:
         best = None
