@@ -128,7 +128,8 @@ def test_predefined_resume_after_drop_completes_and_recovers(tmp_path):
 
     def factory(context, tm1, mgr):
         return PredefinedOrderExecutor(
-            tm1, "C", [], [], dims, 1, True, orders, context, checkpoint_manager=mgr)
+            tm1, "C", [], [], dims, 1, True, orders, context, checkpoint_manager=mgr,
+            order_frame=OrderFrame(dims, True))
 
     # 1) uninterrupted reference
     ctx = ExecutionContext()
@@ -239,7 +240,8 @@ def test_landed_recovery_does_not_reapply_and_backcalcs(tmp_path):
 
     def factory(context, tm1, mgr):
         return PredefinedOrderExecutor(
-            tm1, "C", [], [], dims, 1, True, orders, context, checkpoint_manager=mgr)
+            tm1, "C", [], [], dims, 1, True, orders, context, checkpoint_manager=mgr,
+            order_frame=OrderFrame(dims, True))
 
     # Build a checkpoint: original + orders[0] completed, orders[1] pending.
     mgr = CheckpointManager("C", "inst", "fp", tmp_path / "run")

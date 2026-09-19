@@ -20,7 +20,7 @@ from optimuspy.executors import (OriginalOrderExecutor, MainExecutor, Predefined
                                  OptimizationCancelled)
 from optimuspy.metrics import (detect_is_v12, cube_memory_used_bytes, memory_by_cube_bytes,
                                ram_source_ready, read_cube_memory_bytes)
-from optimuspy.order_frame import OrderFrame
+from optimuspy.order_frame import OrderFrame, REASON_NOT_A_PERMUTATION
 from optimuspy.resume import recover, RecoveryEffects
 from optimuspy.results import ExecutionContext, OptimusResult
 
@@ -130,9 +130,23 @@ def validate_cube_config(config: dict, mode: str):
         raise ValueError(f"Only one of {exclusive_fields} can be set. Found: {active}")
 
     if 'predefined_orders' in config:
-        for order in config['predefined_orders']:
+        # Tier 1, as much of it as is checkable without a server. Whether the names
+        # are this cube's dimensions can only be settled once the cube is known
+        # (_validate_predefined_orders), but shape and duplicates are config errors
+        # that should never cost a TM1 connection to discover.
+        for index, order in enumerate(config['predefined_orders']):
             if not isinstance(order, list):
                 raise ValueError("Each entry in 'predefined_orders' must be a list of dimension names")
+            if not order:
+                raise ValueError(f"'predefined_orders[{index}]' is empty")
+            if not all(isinstance(dim, str) and dim.strip() for dim in order):
+                raise ValueError(
+                    f"'predefined_orders[{index}]' must contain only non-empty dimension names")
+            duplicates = sorted({dim for dim in order if order.count(dim) > 1})
+            if duplicates:
+                raise ValueError(
+                    f"'predefined_orders[{index}]' repeats {duplicates} — "
+                    f"a dimension order lists each dimension once")
 
     if 'orders_to_ignore' in config:
         for order in config['orders_to_ignore']:
@@ -177,6 +191,26 @@ def resolve_position(value, num_dimensions: int) -> int:
     if pos < 1 or pos > num_dimensions:
         raise ValueError(f"Position {pos} out of range (1-{num_dimensions})")
     return pos - 1
+
+
+def _validate_predefined_orders(predefined_orders: List[List[str]], order_frame, cube_name: str):
+    """Fail the run on a predefined order that is not an order of this cube.
+
+    Tier 1: a wrong length, an unknown dimension name or a duplicate is a config
+    error, not a constraint collision, so it fails loudly — and it fails here,
+    before the first reorder, rather than part-way through a sweep with cubes
+    already modified. Every entry is reported, not just the first, so a typo'd
+    config is fixed in one pass.
+    """
+    malformed = [(index, verdict) for index, verdict in (
+        (i, order_frame.admits(order)) for i, order in enumerate(predefined_orders))
+        if not verdict.admissible and verdict.code == REASON_NOT_A_PERMUTATION]
+    if not malformed:
+        return
+    detail = "\n".join(f"  predefined_orders[{index}]: {verdict.reason}"
+                       for index, verdict in malformed)
+    raise ValueError(
+        f"Invalid predefined_orders for cube '{cube_name}':\n{detail}")
 
 
 def is_dimension_only_numeric(tm1: TM1Service, dimension_name: str) -> bool:
@@ -297,7 +331,10 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
 
         # SET mode: apply order directly, no benchmarking
         if mode == 'set':
-            return _execute_set_mode(tm1, cube_name, predefined_orders[0], is_v12)
+            frame = OrderFrame(
+                initial_dimension_order,
+                not is_dimension_only_numeric(tm1, initial_dimension_order[-1]))
+            return _execute_set_mode(tm1, cube_name, predefined_orders[0], is_v12, frame)
 
         # OPTIMIZE mode
         return _execute_optimize_mode(
@@ -345,8 +382,28 @@ def _recover_pending_order(tm1: TM1Service, cube_name: str, executor, pending: d
     logging.info(f"Recovered in-flight order for cube '{cube_name}': {pending_order}")
 
 
-def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str], is_v12: bool = False) -> bool:
+def _execute_set_mode(tm1: TM1Service, cube_name: str, target_order: List[str],
+                      is_v12: bool = False, order_frame=None) -> bool:
     logging.info(f"SET mode: applying dimension order for cube '{cube_name}' to: {target_order}")
+
+    # A TI process calling this via ExecuteCommand cannot tell "applied" from
+    # "skipped" by exit code, so the log line is the only channel — and the two
+    # outcomes below are deliberately different channels.
+    verdict = order_frame.admits(target_order)
+    if not verdict.admissible:
+        if verdict.code == REASON_NOT_A_PERMUTATION:
+            # Tier 1: not a coherent request. Fail the process rather than let a
+            # typo look like a successful no-op.
+            logging.error(
+                f"SET mode: invalid dimension order for cube '{cube_name}' — {verdict.reason}. "
+                f"No reorder was applied.")
+            return False
+        # Tier 2: a legitimate request TM1 will refuse anyway. Warn and carry on.
+        logging.warning(
+            f"SET mode: REORDER SKIPPED for cube '{cube_name}' — {verdict.reason}. "
+            f"The cube is unchanged, still ordered {order_frame.storage_order}. "
+            f"Exiting 0: nothing failed, nothing was applied.")
+        return True
 
     # Before/after RAM logging is best-effort; never let the RAM source lifecycle
     # block the actual reorder, which is the primary purpose of set mode.
@@ -451,6 +508,18 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             f"Last slot locked for cube '{cube_name}': dimension "
             f"'{initial_dimension_order[-1]}' has string elements and never moves")
 
+    # The frame every order source consults. Only the greedy adds the user
+    # preferences to its own copy (decision 10); an explicitly named order is
+    # subject to the lock alone.
+    cube_frame = OrderFrame(initial_dimension_order, last_slot_locked)
+
+    # Tier 1 for predefined orders: reject a malformed order BEFORE any reorder is
+    # sent, so a typo cannot fail the run half-way with cubes already modified.
+    # validate_cube_config catches what is checkable without a server; a name that
+    # is not one of this cube's dimensions can only be caught here.
+    if predefined_orders:
+        _validate_predefined_orders(predefined_orders, cube_frame, cube_name)
+
     with ram_source_ready(tm1, is_v12):
         try:
             # Benchmark original order (skip if resumed)
@@ -481,7 +550,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                     tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
                     last_slot_locked, resolved_pos, context, dimensions_to_exclude,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                    cancel_event=cancel_event, is_v12=is_v12)
+                    cancel_event=cancel_event, is_v12=is_v12, order_frame=cube_frame)
             elif optimize_dimension:
                 if optimize_dimension not in initial_dimension_order:
                     raise ValueError(
@@ -492,13 +561,13 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                     tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
                     last_slot_locked, optimize_dimension, context,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                    cancel_event=cancel_event, is_v12=is_v12)
+                    cancel_event=cancel_event, is_v12=is_v12, order_frame=cube_frame)
             elif predefined_orders:
                 executor = PredefinedOrderExecutor(
                     tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
                     last_slot_locked, predefined_orders, context,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
-                    cancel_event=cancel_event, is_v12=is_v12)
+                    cancel_event=cancel_event, is_v12=is_v12, order_frame=cube_frame)
             else:
                 dimensions_metadata = _collect_dimension_metadata(tm1, initial_dimension_order)
                 cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}

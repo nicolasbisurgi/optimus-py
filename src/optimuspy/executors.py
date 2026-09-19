@@ -216,13 +216,6 @@ class OptipyzerExecutor:
         logging.debug(f"Skipping order — {verdict.reason}")
         return True
 
-    def _has_string_elements(self, dimension_name: str) -> bool:
-        hierarchy_name = "Leaves" if self.tm1.hierarchies.exists(
-            dimension_name=dimension_name, hierarchy_name="Leaves") else dimension_name
-        elements = self.tm1.elements.get_element_types(
-            dimension_name=dimension_name, hierarchy_name=hierarchy_name, skip_consolidations=True)
-        return any(etype != "Numeric" for etype in elements.values())
-
     def clear_cube_cache(self):
         process = Process(name="", prolog_procedure=f"DebugUtility(125 ,0 ,0 ,'{self.cube_name}' ,'' ,'');")
         success, status, error_log_file = self.tm1.processes.execute_process_with_return(process)
@@ -365,10 +358,10 @@ class OriginalOrderExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int,
                  last_slot_locked: bool, original_dimension_order: List[str],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
-                 cancel_event=None, is_v12: bool = False):
+                 cancel_event=None, is_v12: bool = False, order_frame=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          last_slot_locked, context, checkpoint_manager, process_parameters,
-                         cancel_event, is_v12=is_v12)
+                         cancel_event, is_v12=is_v12, order_frame=order_frame)
         self.mode = ExecutionMode.ORIGINAL_ORDER
         self.original_dimension_order = original_dimension_order
 
@@ -629,10 +622,10 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int,
                  last_slot_locked: bool, predefined_orders: List[List[str]],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
-                 cancel_event=None, is_v12: bool = False):
+                 cancel_event=None, is_v12: bool = False, order_frame=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          last_slot_locked, context, checkpoint_manager, process_parameters,
-                         cancel_event, is_v12=is_v12)
+                         cancel_event, is_v12=is_v12, order_frame=order_frame)
         self.mode = ExecutionMode.ITERATIONS
         self.predefined_orders = predefined_orders
 
@@ -663,6 +656,12 @@ class PredefinedOrderExecutor(OptipyzerExecutor):
                     })
                 continue
 
+            # Tier 2: a named order that moves the locked dimension is skipped
+            # with a reason and the run continues to the next one.
+            if self._frame_refuses(order):
+                completed_indices.add(idx)
+                continue
+
             self._check_cancelled()
             result = self._evaluate_permutation(order, total_permutations=total)
             results.append(result)
@@ -686,17 +685,17 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
                  dimensions: List[str], executions: int, last_slot_locked: bool,
                  target_position: int, context: ExecutionContext,
                  dimensions_to_exclude: List[str] = None, checkpoint_manager=None,
-                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
+                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False,
+                 order_frame=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          last_slot_locked, context, checkpoint_manager, process_parameters,
-                         cancel_event, is_v12=is_v12)
+                         cancel_event, is_v12=is_v12, order_frame=order_frame)
         self.mode = ExecutionMode.ITERATIONS
         self.target_position = target_position
         self.dimensions_to_exclude = dimensions_to_exclude or []
 
     def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         current_order = self.dimensions[:]
-        is_last = (self.target_position == len(current_order) - 1)
 
         completed_dimensions = set()
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
@@ -712,12 +711,7 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
         total = len([d for d in candidates if d not in completed_dimensions])
 
         def skip_candidate(dim, target_position):
-            if dim in completed_dimensions:
-                return True
-            if is_last and self._has_string_elements(dim):
-                logging.info(f"Skip '{dim}' — has string elements, can't be last")
-                return True
-            return False
+            return dim in completed_dimensions
 
         def checkpoint_cb(dim, results):
             completed_dimensions.add(dim)
@@ -726,9 +720,13 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
                 last_applied_order=list(results[-1].dimension_order),
                 executor_state={"position_state": {"completed_dimensions": sorted(completed_dimensions)}})
 
+        # The frame replaces the per-candidate get_element_types round-trip that
+        # used to run inside this sweep: the lock is one fact about the cube,
+        # decided once, not a question to re-ask the server per candidate.
         return self._sweep_into_position(
             current_order, self.target_position, candidates, total_permutations=total,
-            skip_candidate=skip_candidate, checkpoint_cb=checkpoint_cb)
+            skip_candidate=skip_candidate, skip_permutation=self._frame_refuses,
+            checkpoint_cb=checkpoint_cb)
 
 
 class DimensionOptimizerExecutor(OptipyzerExecutor):
@@ -737,18 +735,17 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int, last_slot_locked: bool,
                  target_dimension: str, context: ExecutionContext, checkpoint_manager=None,
-                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
+                 process_parameters: dict = None, cancel_event=None, is_v12: bool = False,
+                 order_frame=None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
                          last_slot_locked, context, checkpoint_manager, process_parameters,
-                         cancel_event, is_v12=is_v12)
+                         cancel_event, is_v12=is_v12, order_frame=order_frame)
         self.mode = ExecutionMode.ITERATIONS
         self.target_dimension = target_dimension
 
     def execute(self, resume_state: dict = None) -> List[PermutationResult]:
         current_order = self.dimensions[:]
         current_idx = current_order.index(self.target_dimension)
-        has_strings = self._has_string_elements(self.target_dimension)
-        last_pos = len(current_order) - 1
 
         completed_positions = set()
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
@@ -756,16 +753,18 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
             completed_positions = set(executor_state["dimension_state"]["completed_positions"])
             logging.info(f"Resuming dimension optimizer: {len(completed_positions)} positions already tested")
 
+        # A slot that cannot hold anything else — the locked one — is not a
+        # candidate. The frame still guards every generated order, which is what
+        # catches the case where the TARGET dimension is itself the locked one:
+        # every move of it is refused and the sweep evaluates nothing.
+        reserved = self.order_frame.reserved_positions()
         candidate_positions = [
             p for p in range(len(current_order))
             if p != current_idx
             and p not in completed_positions
-            and not (p == last_pos and has_strings)
+            and p not in reserved
         ]
-        total = last_pos if not has_strings else last_pos - 1
-
-        def skip_permutation(_permutation):
-            return False
+        total = len(candidate_positions)
 
         def checkpoint_cb(position, results):
             completed_positions.add(position)
@@ -776,5 +775,5 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
 
         return self._sweep_across_positions(
             current_order, self.target_dimension, candidate_positions,
-            total_permutations=total, skip_permutation=skip_permutation,
+            total_permutations=total, skip_permutation=self._frame_refuses,
             checkpoint_cb=checkpoint_cb)

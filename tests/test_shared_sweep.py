@@ -142,23 +142,27 @@ def test_pick_best_ram(scripted):
 
 
 from optimuspy.executors import PositionOptimizerExecutor
+from optimuspy.order_frame import OrderFrame, REASON_LOCKED_SLOT
 
 
-def _make_position_optimizer(target_position, dims, exclude=None):
+def _make_position_optimizer(target_position, dims, exclude=None, last_slot_locked=False):
     ex = object.__new__(PositionOptimizerExecutor)
     ex.context = ExecutionContext()
     ex.mode = ExecutionMode.ITERATIONS
     ex.cube_name, ex.view_names, ex.process_names = "C", [], []
     ex.cancel_event = ex.checkpoint_manager = None
+    # No TM1 handle at all: the lock is decided once by the frame, so a sweep
+    # that tried to ask the server would fail here rather than pass quietly.
+    ex.tm1 = None
     ex.dimensions = list(dims)
     ex.target_position = target_position
     ex.dimensions_to_exclude = exclude or []
+    ex.order_frame = OrderFrame(dims, last_slot_locked)
+    ex.skipped_orders = {}
     ex._resumed_results = []
     ex._original_order_result = None
     ex._initial_dimension_order = None
     ex._recovered_results = {}
-    # no string elements anywhere
-    ex._has_string_elements = lambda name: False
     return ex
 
 
@@ -172,19 +176,11 @@ def test_position_optimizer_sweeps_all_other_dims(scripted):
     assert [r.dimension_order[0] for r in results] == ["B", "C"]
 
 
-def test_position_optimizer_resume_never_requeries_completed_dims(scripted):
-    # "A" is already completed from a prior checkpoint. On resume, the executor
-    # must never call _has_string_elements("A") — completed dims are skipped
-    # BEFORE the string check, exactly like the pre-refactor code did.
+def test_position_optimizer_resume_skips_completed_dims(scripted):
+    # "A" is already completed from a prior checkpoint and must not be re-swept.
+    # The executor holds no TM1 handle, so this also pins the fact that the sweep
+    # asks the server nothing at all: the lock was decided once, by the frame.
     ex = _make_position_optimizer(3, ["A", "B", "C", "D"])  # last position (index 3)
-    string_calls = []
-
-    def has_string_elements(name):
-        string_calls.append(name)
-        return False
-
-    ex._has_string_elements = has_string_elements
-
     log = []
     scripted(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
@@ -195,64 +191,62 @@ def test_position_optimizer_resume_never_requeries_completed_dims(scripted):
     # "A" was already completed: it must never appear as a swept-in candidate.
     assert "A" not in [r.dimension_order[3] for r in results]
     assert "A" not in [o[3] for o in log]
-    # "A" must never have been queried for string elements — it's completed,
-    # so skip_candidate short-circuits before reaching the string check.
-    assert "A" not in string_calls
     # The non-completed candidates (B, C) were genuinely swept.
     assert {r.dimension_order[3] for r in results} == {"B", "C"}
-    # _has_string_elements called at most once per non-completed candidate (B, C).
-    assert len(string_calls) <= 2
 
 
-def test_position_optimizer_skips_string_candidate_at_last_position(scripted):
-    # target_position is the last index; "B" has string elements and must never
-    # be swept into the last slot. Non-string candidates must still be swept,
-    # and _has_string_elements must be called at most once per non-completed
-    # candidate (never twice for the same dim, never for completed dims).
-    ex = _make_position_optimizer(3, ["A", "B", "C", "D"])  # last position (index 3)
-    string_calls = []
-
-    def has_string_elements(name):
-        string_calls.append(name)
-        return name == "B"
-
-    ex._has_string_elements = has_string_elements
-
+def test_position_optimizer_evaluates_nothing_when_targeting_the_locked_slot(scripted):
+    # The last slot is locked, so nothing may be swept into it: every candidate
+    # would move the locked dimension. The old code asked the server per candidate
+    # whether IT had strings and let a numeric one through — which TM1 would then
+    # have rejected, because the locked dim would have been displaced.
+    ex = _make_position_optimizer(3, ["A", "B", "C", "D"], last_slot_locked=True)
     log = []
     scripted(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     results = ex.execute()
 
-    # "B" has strings and target position is last: it must never appear there.
-    assert "B" not in [r.dimension_order[3] for r in results]
-    assert "B" not in [o[3] for o in log]
-    # Non-string candidates (A, C) were genuinely swept into the last slot.
-    assert {r.dimension_order[3] for r in results} == {"A", "C"}
-    # Candidates considered: A, B, C (D is the incumbent at position 3, excluded).
-    non_completed_candidate_count = 3
-    assert len(string_calls) <= non_completed_candidate_count
-    # No candidate was queried more than once.
-    from collections import Counter
-    assert all(count == 1 for count in Counter(string_calls).values())
+    assert results == []
+    assert log == []
+    assert ex.skipped_orders == {REASON_LOCKED_SLOT: 3}
+    # "D" is still last, because nothing was ever evaluated.
+    assert ex.dimensions[3] == "D"
+
+
+def test_position_optimizer_works_normally_at_a_free_slot_on_a_locked_cube(scripted):
+    # The lock closes one slot, not the search. Targeting any other position on
+    # the same cube sweeps every candidate but the locked dimension.
+    ex = _make_position_optimizer(0, ["A", "B", "C", "D"], last_slot_locked=True)
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+
+    results = ex.execute()
+
+    assert [r.dimension_order[0] for r in results] == ["B", "C"]
+    assert all(o[-1] == "D" for o in log)
+    assert ex.skipped_orders == {REASON_LOCKED_SLOT: 1}  # the D-into-slot-0 candidate
 
 
 from optimuspy.executors import DimensionOptimizerExecutor
 
 
-def _make_dimension_optimizer(target_dimension, dims, has_strings=False):
+def _make_dimension_optimizer(target_dimension, dims, last_slot_locked=False):
     ex = object.__new__(DimensionOptimizerExecutor)
     ex.context = ExecutionContext()
     ex.mode = ExecutionMode.ITERATIONS
     ex.cube_name, ex.view_names, ex.process_names = "C", [], []
     ex.cancel_event = ex.checkpoint_manager = None
+    ex.tm1 = None
     ex.dimensions = list(dims)
     ex.target_dimension = target_dimension
+    ex.order_frame = OrderFrame(dims, last_slot_locked)
+    ex.skipped_orders = {}
     ex._resumed_results = []
     ex._original_order_result = None
     ex._initial_dimension_order = None
     ex._recovered_results = {}
-    ex._has_string_elements = lambda name: has_strings
     return ex
 
 
@@ -266,13 +260,28 @@ def test_dimension_optimizer_sweeps_all_positions_except_current(scripted):
     assert [r.dimension_order.index("A") for r in results] == [1, 2]
 
 
-def test_dimension_optimizer_skips_last_position_for_string_dim(scripted):
-    ex = _make_dimension_optimizer("A", ["A", "B", "C"], has_strings=True)
+def test_dimension_optimizer_never_targets_the_locked_slot(scripted):
+    # "C" is locked last, so it is not a candidate position for anything —
+    # whatever the moving dimension happens to contain.
+    ex = _make_dimension_optimizer("A", ["A", "B", "C"], last_slot_locked=True)
     log = []
     scripted(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
     results = ex.execute()
-    assert all(r.dimension_order[-1] != "A" for r in results)
+    assert [r.dimension_order.index("A") for r in results] == [1]
+    assert all(o[-1] == "C" for o in log)
+
+
+def test_dimension_optimizer_evaluates_nothing_for_the_locked_dimension(scripted):
+    # Asking to optimize the locked dimension's position has one honest answer:
+    # it has none. Every move of it is refused and nothing is evaluated.
+    ex = _make_dimension_optimizer("C", ["A", "B", "C"], last_slot_locked=True)
+    log = []
+    scripted(ex, lambda o: 100.0 - len(log), log)
+    ex.context.set_initial_ram(100.0)
+    results = ex.execute()
+    assert results == []
+    assert log == []
 
 
 def test_dimension_optimizer_resume_skips_completed_position(scripted):

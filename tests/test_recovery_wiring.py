@@ -7,6 +7,7 @@ competes in the greedy pick and appears in the report but is measured only once.
 """
 from optimuspy.execution_mode import ExecutionMode
 from optimuspy.executors import PredefinedOrderExecutor
+from optimuspy.order_frame import OrderFrame
 from optimuspy.results import ExecutionContext, PermutationResult
 from tests.test_fold_a import make_main_executor
 
@@ -63,7 +64,8 @@ def test_predefined_injects_recovered_without_reapplying(scripted):
     ex = PredefinedOrderExecutor(
         tm1=None, cube_name="C", view_names=[], process_names=[],
         dimensions=["A", "B"], executions=1, last_slot_locked=False,
-        predefined_orders=orders, context=ExecutionContext())
+        predefined_orders=orders, context=ExecutionContext(),
+        order_frame=OrderFrame(["A", "B"], False))
     log = []
     ram_of = lambda o: 100.0
     scripted(ex, ram_of, log)
