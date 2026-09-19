@@ -32,6 +32,16 @@ _Avoid_: "size" (reserved-against for memory — ambiguous), "dimension size", "
 The ratio that decides whether the greedy will test *both* relative orderings of two dimensions. If one dimension's **cardinality** is ≥ τ× another's, theory decides the order (larger ⇒ sparser ⇒ later) and the reverse ordering is never tested; within τ the pair is *undecided* and both orderings are tested, because density — which OptimusPy cannot know in advance — may justify either. Larger τ ⇒ looser ⇒ more orderings tested. Applied full-strength at RAM-ranked positions, looser at query-ranked positions, and not at all at process-ranked positions (see `docs/adr/0002`). Pinning a dimension (e.g. a 50k-leaf dim to the back) is just the degenerate case where τ leaves it the only candidate for an end position.
 _Avoid_: "bucket" / "size band" — an earlier, lossier framing; dimensions do not fall into fixed cardinality bands, ordering is decided pairwise.
 
+### Order admissibility
+
+**order frame**:
+The single authority on a cube's dimension order (`src/optimuspy/order_frame.py`). It is built from the cube's storage order — `get_storage_dimension_order()`, never the presentation order — plus whether the last slot is locked, and it answers one question: is this candidate order admissible, and if not, why. Every order source consults it: both greedy folds, predefined orders, position and dimension optimization, and set mode. Pure: no `TM1Service`, no I/O, no logging — the caller logs the reason it returns. Offline-testable in the same category as the **leaf-count tolerance (τ)** helpers.
+_Avoid_: "validator" (it decides admissibility, it does not repair or relocate anything), "dimension order" unqualified when the *storage* order is meant
+
+**locked slot**:
+The last position of a cube's storage order, when the dimension sitting there contains string elements. That dimension never moves, whatever the order source, and any candidate order that would move it is skipped with a logged reason while processing continues. This is a *server* constraint — TM1 rejects the write regardless — which is why it applies to explicitly-named orders too, unlike the user preferences (position rules, excluded dimensions, ignored orders) that only the greedy folds honour. A cube whose storage-last dimension is numeric-only has no lock and every position is free. Note this keys off the *position*, not the dimension: a dimension is shared between cubes, so one carrying string elements somewhere else in the order is not locked and is placed by **cardinality** like any other.
+_Avoid_: "string dimension constraint" (implies the dimension is what is locked, rather than the slot), "freeze" / "relocate" (OptimusPy never moves a dimension to satisfy this — it skips the order)
+
 ### Instance-wide pass
 
 **heuristic pass** (UI: "Optimize DB", CLI: `optimize-db`):
@@ -54,6 +64,7 @@ A per-cube `%` computed from absolute **cube_memory_used** reads instead of take
 
 - A **permutation** (storage dimension order) produces one **RAM baseline** reading via **cube_memory_used**
 - **cube_memory_used** is served by **MetricService**, carrying a **Unit** that must be converted to bytes at the read boundary
+- Every candidate **permutation** is admitted or refused by the **order frame** before it reaches the server; the **locked slot** is the one rule binding on every order source, while **cardinality** and **leaf-count tolerance (τ)** shape only what the greedy folds propose
 
 ## Scope of the v12 migration
 
