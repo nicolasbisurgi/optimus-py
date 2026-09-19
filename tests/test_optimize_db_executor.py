@@ -42,6 +42,12 @@ class FakeCubes:
     def get_storage_dimension_order(self, cube_name):
         if self.server.dead:
             raise ConnectionError("connection dropped")
+        behaviour = self.server.behaviour.get(cube_name, {})
+        if behaviour.get("probe_raises_once"):
+            # Something the module never anticipated — a TM1py payload change,
+            # not a dropped connection. Nothing in `_reorder_cube` catches it.
+            behaviour["probe_raises_once"] = False
+            raise KeyError("unexpected TM1py response shape")
         return list(self.server.orders[cube_name])
 
     def update_storage_dimension_order(self, cube_name, order):
@@ -517,3 +523,64 @@ def test_resume_inherits_the_original_deadline(tmp_path, frozen_clock):
     assert state["deadline_at"] == deadline
     assert result["deadline_at"] == pytest.approx(result["started_at"]
                                                   + plan["options"]["time_limit_hours"] * 3600)
+
+
+def test_a_run_killed_by_an_unexpected_error_is_not_recorded_as_completed(tmp_path, frozen_clock):
+    """The headline promise: a sweep that dies at cube 2 of 3 can be resumed.
+
+    Anything that is not `OptimizeDbAborted` is re-raised after the first
+    successful connect, so only the initialiser decides what the `finally`
+    persists. If it says `completed`, `optimize_db(resume_plan_id=…)` reports
+    "already completed" and the remaining cubes are lost.
+    """
+    server = three_cube_server(Medium={"probe_raises_once": True})
+    frozen_clock["server"] = server
+    plan = make_plan(server)
+    odb.write_json(odb.plan_path(plan["plan_id"], "srv", tmp_path), plan)
+
+    with pytest.raises(KeyError):
+        odb.optimize_db(server.connect, plan=plan, result_path=tmp_path)
+
+    artifact = json.loads(odb.run_path(plan["plan_id"], "srv", tmp_path).read_text())
+    assert artifact["status"] == "failed"
+    assert artifact["cubes"]["Small"]["status"] == "done"
+    assert artifact["cubes"]["Medium"]["status"] == "pending"
+    assert artifact["cubes"]["Big"]["status"] == "pending"
+
+    resumed = odb.optimize_db(server.connect, resume_plan_id=plan["plan_id"],
+                              result_path=tmp_path)
+    assert resumed["status"] == "completed"
+    assert [c for c, _ in server.reorders] == ["Small", "Medium", "Big"]
+
+
+
+def test_a_resume_keeps_the_throughput_it_already_measured(tmp_path, frozen_clock):
+    """`prepare_resume` must not wipe `run["samples"]`.
+
+    With the window gone `fits_in_budget` has nothing to extrapolate from and
+    returns `(True, None)` — see
+    `test_first_cube_always_runs_because_there_is_nothing_to_extrapolate_from`
+    — so the first cube after every resume would start regardless of how
+    little of the inherited deadline is left. A `ReorderDimensions` already
+    under way cannot be aborted.
+    """
+    server = three_cube_server()
+    frozen_clock["server"] = server
+    plan = make_plan(server)
+    # Under 500s of the inherited budget left; Medium is priced at 10 GB over
+    # the retained 1 GB / 100s, i.e. 1000s.
+    plan["options"]["time_limit_hours"] = 500 / 3600
+    state = odb.new_run(plan, tmp_path)
+    state["samples"] = [[1 * GB, 100.0]]
+    state["cubes"]["Small"].update(status="done", duration_s=100.0)
+    server.orders["Small"] = list(plan["cubes"][0]["target_order"])
+
+    assert odb.prepare_resume(server.connect(), plan, state) == 0
+    assert state["samples"] == [[1 * GB, 100.0]]
+
+    path = tmp_path / "run.json"
+    result = odb.execute_plan(server.connect, plan, state,
+                              lambda: odb.write_json(path, state))
+    assert server.reorders == []
+    assert result["status"] == "stopped_time_limit"
+    assert result["cubes"]["Medium"]["status"] == "pending"

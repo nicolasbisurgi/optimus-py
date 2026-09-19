@@ -555,7 +555,11 @@ def execute_plan(connect: Callable[[], object], plan: dict, run: dict,
     deadline = run["deadline_at"]
     tm1 = None
     consecutive_failures = 0
-    status = "completed"
+    # Pessimistic by design: only the `for…else` below may say "completed". An
+    # unexpected error re-raised out of the `except Exception` never touches
+    # `status`, and the `finally` would otherwise persist a stale success into
+    # the run artifact — making a half-finished sweep unresumable.
+    status = "failed"
     try:
         # Inside the try so an instance that is already down is recorded as a
         # failed run rather than raised at an unattended operator.
@@ -791,7 +795,11 @@ def prepare_resume(tm1, plan: dict, run: dict, is_v12: bool = False) -> int:
             logging.info(f"'{cube}' no longer matches its recorded order — will redo")
             state.update(status="pending", pct_change=None, duration_s=None, derived=False)
             reset += 1
-    run["samples"] = []
+    # `run["samples"]` deliberately survives the resume. Throughput measured on
+    # this instance is still broadly valid, and wiping it would make
+    # `fits_in_budget` return `(True, None)` for the first cube after every
+    # resume — starting an unabortable six-hour rebuild minutes before the
+    # inherited deadline.
     return reset
 
 
