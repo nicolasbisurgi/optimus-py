@@ -18,6 +18,7 @@ CLAUDE.md
 parity.json
 v11_before.json
 v11_after.json
+parity_snapshot_v2.json
 
 # mkdocs build output
 mkdocs_site/
@@ -31,3 +32,17 @@ docs/*.docx
 PLAN.md
 pending.txt
 logs/
+
+
+# Local scratch, continued. Anchored with a leading slash on purpose: `images/`
+# and `requirements/` are ordinary directory names a tool could create anywhere,
+# and `images/` at the repo root is itself tracked (logo.png, logo.svg,
+# scatter_plot.png). Only these exact stray paths are ignored.
+#
+# /images/icon.png duplicates the packaged src/optimuspy/images/icon.png.
+# /requirements/ is the landing-page spec and mockups, not a Python
+# requirements directory.
+/images/icon.png
+/requirements/
+/samples/generate_full_drafts.py
+/samples/optimize_copy.json
