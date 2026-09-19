@@ -22,13 +22,22 @@ from optimuspy.results import ExecutionContext, OptimusResult
 # FakeTM1 — models cube RAM as a function of the current storage order and can
 # simulate a dropped connection on the Nth reorder.
 #
-# This is the suite's ONE fake and it is not a precedent. Recovery reads the cube
-# back after a crash (get_storage_dimension_order, metrics.by_cube) from OUTSIDE
-# the executor, so there is no seam to supply numbers through the way
-# install_offline_measurements does for a sweep. Its live counterpart is
-# test_live_resume_drop.py, which drives the same two branches against a real
-# server. Anything else that wants a server gets a real TM1Service or stays
-# offline — do not copy this class.
+# This one is deferred, not blessed. Recovery reads the cube back after a crash
+# (get_storage_dimension_order, metrics.by_cube) from OUTSIDE the executor, so
+# there is no seam to supply numbers through the way install_offline_measurements
+# does for a sweep. Its live counterpart is test_live_resume_drop.py, which drives
+# the same two branches against a real server.
+#
+# It is the only fake outside the optimize_db suite that models a cube. A grep for
+# "Fake" finds the rest, all predating the offline/live split and none of them a
+# precedent either: test_optimize_db_executor.py carries six, fenced off by
+# docs/superpowers/plans/2026-09-18-land-optimize-db.md for that work to retire;
+# test_inflight_status.py and test_ram_reanchor.py each carry a two-method stub of
+# update_storage_dimension_order, because both test behaviour BELOW the
+# _measure_permutation seam — a reorder that raises, and the one absolute re-anchor
+# taken around a reorder. Nothing should be added to that list: a test that needs a
+# server gets a real TM1Service behind @pytest.mark.live, and a test that needs
+# measurements gets install_offline_measurements.
 # --------------------------------------------------------------------------- #
 class _FakeCubes:
     def __init__(self, tm1):
