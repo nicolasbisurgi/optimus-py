@@ -1,4 +1,8 @@
 """Offline tests for the order frame. No TM1, no fake — the module is pure."""
+import itertools
+
+import pytest
+
 from optimuspy.order_frame import (
     OrderFrame,
     REASON_IGNORED_ORDER,
@@ -107,16 +111,96 @@ def test_the_lock_outranks_a_user_preference_in_the_reported_reason():
     assert f.admits(moved).code == REASON_LOCKED_SLOT
 
 
-def test_position_rule_predicate_is_preserved_verbatim():
-    # Documents CURRENT behaviour, defect included: the rule is reported as
-    # unsatisfied when the dimension IS at the configured position, and the
-    # integer branch is 1-based. Both are corrected in their own commit, which
-    # rewrites this test.
-    f = frame(position_rules=[{"dimension": "Year", "position": "first"}])
-    verdict = f.admits(["Year", "Region", "Product", "Account", "Measure"])
+def test_a_rule_is_satisfied_when_the_dimension_is_at_the_named_position():
+    f = frame(position_rules=[{"dimension": "Year", "position": 0}])
+    assert f.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+
+
+def test_a_rule_is_unsatisfied_when_the_dimension_is_elsewhere():
+    f = frame(position_rules=[{"dimension": "Year", "position": 0}])
+    verdict = f.admits(["Region", "Year", "Product", "Account", "Measure"])
     assert not verdict.admissible
     assert verdict.code == REASON_POSITION_RULE
+    assert "must be at position 0" in verdict.reason
+    assert "puts it at 1" in verdict.reason
+
+
+def test_integer_positions_are_zero_based():
+    # docs/advanced/dimension-position-rules.md: "position | integer | 0-based".
+    # position 1 means index 1 — the second slot — not the first.
+    f = frame(position_rules=[{"dimension": "Region", "position": 1}])
+    assert f.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+    assert not f.admits(["Region", "Year", "Product", "Account", "Measure"]).admissible
+
+
+def test_position_zero_means_the_first_slot():
+    f = frame(position_rules=[{"dimension": "Region", "position": 0}])
     assert f.admits(["Region", "Year", "Product", "Account", "Measure"]).admissible
+    assert not f.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+
+
+def test_first_and_last_name_the_end_slots():
+    first = frame(position_rules=[{"dimension": "Year", "position": "first"}])
+    assert first.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+    assert not first.admits(["Region", "Year", "Product", "Account", "Measure"]).admissible
+
+    last = frame(position_rules=[{"dimension": "Measure", "position": "last"}])
+    assert last.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+    assert not last.admits(["Measure", "Year", "Region", "Product", "Account"]).admissible
+
+
+def test_every_rule_must_hold():
+    f = frame(position_rules=[{"dimension": "Year", "position": 0},
+                              {"dimension": "Account", "position": 3}])
+    assert f.admits(["Year", "Region", "Product", "Account", "Measure"]).admissible
+    # First rule holds, second does not.
+    verdict = f.admits(["Year", "Region", "Account", "Product", "Measure"])
+    assert not verdict.admissible
+    assert "Account" in verdict.reason
+
+
+@pytest.mark.parametrize("rule", [
+    {"dimension": "Yaer", "position": 0},      # typo'd dimension name
+    {"dimension": "Year", "position": "middle"},  # not a keyword
+    {"dimension": "Year", "position": 99},     # out of range
+    {"dimension": "Year", "position": -1},     # negative
+    {"dimension": "Year", "position": 2.7},    # float
+    {"dimension": "Year", "position": 3.0},    # float that looks like an index
+    {"dimension": "Year", "position": None},
+])
+def test_a_rule_naming_no_slot_is_left_to_startup_validation(rule):
+    # A rule that names no real slot must not quietly refuse the entire search
+    # space: that would leave the greedy with nothing to evaluate and the run
+    # reporting success. It is ignored here and rejected at startup, where the
+    # message can name the config field. Assert EVERY order is still admitted.
+    f = frame(position_rules=[rule])
+    every_order = list(itertools.permutations(STORAGE))
+    assert all(f.admits(list(order)).admissible for order in every_order)
+    assert len(every_order) == 120
+
+
+def test_required_index_resolves_positions():
+    assert OrderFrame.required_index(0, 5) == 0
+    assert OrderFrame.required_index(3, 5) == 3
+    assert OrderFrame.required_index(4, 5) == 4
+    assert OrderFrame.required_index("first", 5) == 0
+    assert OrderFrame.required_index("last", 5) == 4
+
+
+def test_required_index_refuses_anything_that_names_no_slot():
+    # Out of range, in both directions — the reason dimension_count is a parameter.
+    assert OrderFrame.required_index(5, 5) is None
+    assert OrderFrame.required_index(99, 5) is None
+    assert OrderFrame.required_index(-1, 5) is None
+    # Floats are refused rather than truncated: 2.7 is a malformed config, not
+    # a request for slot 2.
+    assert OrderFrame.required_index(2.7, 5) is None
+    assert OrderFrame.required_index(3.0, 5) is None
+    # bool is a subclass of int; True must not resolve to slot 1.
+    assert OrderFrame.required_index(True, 5) is None
+    assert OrderFrame.required_index(False, 5) is None
+    assert OrderFrame.required_index("middle", 5) is None
+    assert OrderFrame.required_index(None, 5) is None
 
 
 # --- the shape of the search space ----------------------------------------

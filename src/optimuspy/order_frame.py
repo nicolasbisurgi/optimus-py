@@ -126,39 +126,59 @@ class OrderFrame:
 
         unsatisfied = self._unsatisfied_position_rule(candidate)
         if unsatisfied is not None:
-            rule, actual_index = unsatisfied
+            rule, actual_index, required_index = unsatisfied
             return Admissibility(
                 False, REASON_POSITION_RULE,
-                f"dimension_position_rules: '{rule['dimension']}' is at position "
-                f"{actual_index}, rule says {rule['position']!r}")
+                f"dimension_position_rules: '{rule['dimension']}' must be at position "
+                f"{required_index} ({rule['position']!r}), this order puts it at "
+                f"{actual_index}")
 
         return ADMISSIBLE
 
-    def _unsatisfied_position_rule(self, candidate: List[str]) -> Optional[Tuple[Dict, int]]:
-        """The first position rule this order falls foul of, with the dimension's index.
+    def _unsatisfied_position_rule(
+            self, candidate: List[str]) -> Optional[Tuple[Dict, int, int]]:
+        """The first position rule this order fails, as (rule, actual, required).
 
-        NOTE: this is `MainExecutor._violates_position_rules` moved verbatim, which
-        means it carries that function's defect: it reports a rule as unsatisfied
-        when the dimension **is** at its configured position — the inverse of
-        docs/advanced/dimension-position-rules.md — and its integer branch is
-        1-based where that page specifies 0-based. Preserved exactly so that
-        routing the folds through the frame changes no behaviour; corrected in its
-        own commit, where the fix is reviewable on its own.
+        A rule is *satisfied* when the dimension is at the position it names — that
+        is the layout the user asked to lock. Integer positions are 0-based, per
+        docs/advanced/dimension-position-rules.md; 'first' and 'last' are accepted
+        as names for the end slots.
+
+        A rule naming a dimension the cube does not have, or a position that cannot
+        be read as an index, is skipped here: rejecting those is startup
+        validation's job, where the message can name the config field.
         """
         for rule in self.position_rules:
             dim_name = rule['dimension']
-            pos = rule['position']
             if dim_name not in candidate:
                 continue
+            required_index = self.required_index(rule['position'], len(candidate))
+            if required_index is None:
+                continue
             actual_index = candidate.index(dim_name)
-            if pos == 'first' and actual_index == 0:
-                return rule, actual_index
-            elif pos == 'last' and actual_index == len(candidate) - 1:
-                return rule, actual_index
-            else:
-                try:
-                    if actual_index == int(pos) - 1:
-                        return rule, actual_index
-                except (ValueError, TypeError):
-                    pass
+            if actual_index != required_index:
+                return rule, actual_index, required_index
         return None
+
+    @staticmethod
+    def required_index(position, dimension_count: int) -> Optional[int]:
+        """The 0-based slot a rule's `position` names, or None if it names no slot.
+
+        'first' and 'last' resolve to the end slots; an int is taken as written,
+        0-based. Everything else resolves to None: a word that is not a keyword, a
+        float (truncating 2.7 to 2 would silently reinterpret a malformed config),
+        a bool, and — the reason `dimension_count` is a parameter — any index the
+        cube does not have, whether too large or negative.
+
+        None means "this rule names no slot", which `_unsatisfied_position_rule`
+        passes over. Turning these into the errors the documentation promises is
+        startup validation's job, where the message can name the config field.
+        """
+        if position == 'first':
+            return 0
+        if position == 'last':
+            return dimension_count - 1
+        # bool is a subclass of int, so True would otherwise resolve to slot 1.
+        if isinstance(position, bool) or not isinstance(position, int):
+            return None
+        return position if 0 <= position < dimension_count else None
