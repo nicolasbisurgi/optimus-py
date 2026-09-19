@@ -413,7 +413,8 @@ class MainExecutor(OptipyzerExecutor):
         # Nothing is relocated to satisfy the lock — a candidate that would move
         # the locked dim is simply never generated, and would be refused anyway.
         dimension_pool = self.order_frame.movable_dimensions()
-        mid = int(len(dimension_pool) / 2)
+        # From the full storage order, not from the pool: see tau.midpoint.
+        mid = tau.midpoint(len(self.dimensions))
         has_views, has_processes = bool(self.view_names), bool(self.process_names)
 
         # Result representing the current resulting_order. It carries the "keep the
@@ -526,7 +527,7 @@ class MainExecutor(OptipyzerExecutor):
 
         resulting_order = self._seed_order()
         permutation_results = []
-        mid = int(len(resulting_order) / 2)
+        mid = tau.midpoint(len(self.dimensions))
 
         start_pass = 0
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
