@@ -209,16 +209,29 @@ def main():
 
         logging.info(f"Starting OptimusPy v2.0. Mode: {cmd_args.mode}, Config: {cmd_args.cube_config}")
 
-        cube_config = load_cube_config(cmd_args.cube_config)
-        validate_cube_config(cube_config, cmd_args.mode)
+        # A tier-1 admissibility failure — a malformed order in the config, or a
+        # dimension the cube does not have — is reported the same way as every
+        # other config error: the message alone, exit 1, no traceback. Tier 1
+        # exists because the log line is the only channel a TI process calling
+        # this via ExecuteCommand has, and a stack trace is not that line.
+        try:
+            cube_config = load_cube_config(cmd_args.cube_config)
+            validate_cube_config(cube_config, cmd_args.mode)
 
-        success = run_optimize(
-            mode=cmd_args.mode,
-            cube_config=cube_config,
-            config_ini_path=config_location.path,
-            password=cmd_args.password,
-            no_resume=cmd_args.no_resume,
-            tm1_checkpoint=cmd_args.tm1_checkpoint)
+            success = run_optimize(
+                mode=cmd_args.mode,
+                cube_config=cube_config,
+                config_ini_path=config_location.path,
+                password=cmd_args.password,
+                no_resume=cmd_args.no_resume,
+                tm1_checkpoint=cmd_args.tm1_checkpoint)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"ERROR: {e}")
+            # The catch is deliberately as wide as optimize-db's, so it also
+            # covers a ValueError raised from deeper in the run. Keep the
+            # traceback reachable for those: -v puts it in the log.
+            logging.debug("Run failed with a config-level error", exc_info=True)
+            return 1
 
     if success:
         logging.info("Finished successfully")
