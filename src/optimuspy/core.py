@@ -226,6 +226,25 @@ def _validate_predefined_orders(predefined_orders: List[List[str]], order_frame,
         f"Invalid predefined_orders for cube '{cube_name}':\n{detail}")
 
 
+def _validate_position_rules(order_frame, cube_name: str):
+    """Fail the run on a dimension_position_rules entry that names no real layout.
+
+    The documented behaviour (docs/advanced/dimension-position-rules.md): typos
+    and out-of-range positions fail fast, and a rule that collides with the
+    locked slot raises. Every problem is reported, not just the first, and this
+    runs before any TM1 work — a rule the frame cannot resolve would otherwise
+    constrain nothing and let the run report success over a search nobody asked
+    for.
+    """
+    problems = order_frame.validate_position_rules()
+    if not problems:
+        return
+    detail = "\n".join(f"  dimension_position_rules[{index}]: {message}"
+                       for index, message in problems)
+    raise ValueError(
+        f"Invalid dimension_position_rules for cube '{cube_name}':\n{detail}")
+
+
 def is_dimension_only_numeric(tm1: TM1Service, dimension_name: str) -> bool:
     if tm1.hierarchies.exists(dimension_name=dimension_name, hierarchy_name="Leaves"):
         hierarchy_name = "Leaves"
@@ -526,6 +545,22 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
     # subject to the lock alone.
     cube_frame = OrderFrame(initial_dimension_order, last_slot_locked)
 
+    # The greedy is the only order source that honours the user preferences
+    # (decision 10), so it is the only frame built with them. Built here rather
+    # than at the construction site so its rules are validated before any TM1
+    # work, as the documentation promises.
+    greedy_frame = OrderFrame(
+        initial_dimension_order, last_slot_locked,
+        dimensions_to_exclude=dimensions_to_exclude,
+        orders_to_ignore=orders_to_ignore,
+        position_rules=dimension_position_rules)
+    if dimension_position_rules:
+        _validate_position_rules(greedy_frame, cube_name)
+        pinned = greedy_frame.pinned_positions
+        logging.info(
+            f"dimension_position_rules seat {len(pinned)} dimension(s) for cube "
+            f"'{cube_name}': " + ", ".join(f"'{d}' at {i}" for i, d in sorted(pinned.items())))
+
     # Tier 1 for predefined orders: reject a malformed order BEFORE any reorder is
     # sent, so a typo cannot fail the run half-way with cubes already modified.
     # validate_cube_config catches what is checkable without a server; a name that
@@ -584,13 +619,6 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             else:
                 dimensions_metadata = _collect_dimension_metadata(tm1, initial_dimension_order)
                 cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}
-                # The greedy is the only order source that honours the user
-                # preferences (decision 10), so it is the only frame built with them.
-                greedy_frame = OrderFrame(
-                    initial_dimension_order, last_slot_locked,
-                    dimensions_to_exclude=dimensions_to_exclude,
-                    orders_to_ignore=orders_to_ignore,
-                    position_rules=dimension_position_rules)
                 executor = MainExecutor(
                     tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
                     last_slot_locked, context, fast,

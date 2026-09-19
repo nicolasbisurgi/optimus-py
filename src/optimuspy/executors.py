@@ -406,7 +406,10 @@ class MainExecutor(OptipyzerExecutor):
         return self._run_fold_a(resume_state)
 
     def _run_fold_a(self, resume_state: dict = None) -> List[PermutationResult]:
-        resulting_order = self.dimensions[:]
+        # Pre-application: a dimension named by a position rule is seated at its
+        # slot before the search starts, so the fold begins from the pre-applied
+        # order rather than the storage order.
+        resulting_order = self.order_frame.pre_applied_order()
         permutation_results = []
         # The frame decides what may move: everything except the excluded dims
         # (frozen where they are) and the locked dim (which never moves at all).
@@ -425,6 +428,14 @@ class MainExecutor(OptipyzerExecutor):
 
         placed_positions = []
         executor_state = resume_state.get("executor_state", {}) if resume_state else {}
+        if "fold_a_state" not in executor_state and resulting_order != list(self.dimensions):
+            # Pre-application moved something, so the measured original order is
+            # no longer the order the fold is standing on. Measure the starting
+            # point, as fold B measures its seed: without it every position's
+            # "keep what is here" option carries a RAM figure for a different order.
+            current_result = self._evaluate_permutation(
+                resulting_order, total_permutations=None)
+            permutation_results.append(current_result)
         if "fold_a_state" in executor_state:
             fs = executor_state["fold_a_state"]
             resulting_order = fs["resulting_order"]
@@ -492,9 +503,11 @@ class MainExecutor(OptipyzerExecutor):
         slot for the largest-dense dim). Only the *locked* slot is special, and
         only because TM1 rejects any write that moves the dimension out of it.
 
-        Reserved slots keep whatever already sits in them — an excluded dim (frozen
-        where it is by user preference) and the locked dim (which never moves). The
-        rest are filled with the movable dims in ascending cardinality.
+        The seed starts from the **pre-applied** order, so a dimension named by a
+        position rule is already at its slot. Reserved slots keep whatever sits in
+        them there — an excluded dim (frozen where it is by user preference), a
+        pinned dim (seated by its rule) and the locked dim (which never moves).
+        The rest are filled with the movable dims in ascending cardinality.
 
         Note a string-bearing dimension that is NOT in the locked slot is movable
         and is seeded by cardinality like anything else. Dimensions are shared
@@ -507,7 +520,7 @@ class MainExecutor(OptipyzerExecutor):
         movable = sorted(self.order_frame.movable_dimensions(),
                          key=lambda d: self.cardinality.get(d, 0))
 
-        result = list(self.dimensions)
+        result = self.order_frame.pre_applied_order()
         for position, dim in zip(free_positions, movable):
             result[position] = dim
         return result
