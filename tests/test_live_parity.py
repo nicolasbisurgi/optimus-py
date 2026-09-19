@@ -33,21 +33,43 @@ def instances(request):
     return v11, v12
 
 
-def test_both_versions_pick_the_same_winner_in_every_mode(instances, tm1_config_path):
+@pytest.fixture(scope="module")
+def snapshots(instances, tm1_config_path):
+    """Build and run both instances, and tear both down whatever happens.
+
+    The setup calls belong INSIDE the try. A v12 setup that fails after v11 has
+    already built its cube would otherwise leave that cube on a shared instance —
+    the failure mode that actually costs someone something here. teardown_instance
+    guards every delete with exists(), so it is safe on an instance that was never
+    built.
+    """
     parity = sample_module("validate_v11_v12_parity")
     v11_name, v12_name = instances
-
-    snapshot = {
-        "v11": parity.process_instance(v11_name, tm1_config_path, None, do_setup=True),
-        "v12": parity.process_instance(v12_name, tm1_config_path, None, do_setup=True),
-    }
     try:
-        # compare() prints a per-mode table and returns the verdict; the printed
-        # detail is what makes a failure actionable, so it is not re-derived here.
-        assert parity.compare(snapshot["v11"], snapshot["v12"])
+        yield parity, {
+            "v11": parity.process_instance(v11_name, tm1_config_path, None, do_setup=True),
+            "v12": parity.process_instance(v12_name, tm1_config_path, None, do_setup=True),
+        }
     finally:
+        # One instance failing to clean up must not skip the other, and a
+        # leftover fixture cube is itself a reportable failure — not a warning
+        # swallowed by a passing test.
+        left_behind = []
         for name in (v11_name, v12_name):
-            _teardown(parity, tm1_config_path, name)
+            try:
+                _teardown(parity, tm1_config_path, name)
+            except Exception as exc:                      # noqa: BLE001
+                left_behind.append(f"{name}: {exc}")
+        if left_behind:
+            pytest.fail("parity fixture cube may be left behind on "
+                        + "; ".join(left_behind))
+
+
+def test_both_versions_pick_the_same_winner_in_every_mode(snapshots):
+    parity, snapshot = snapshots
+    # compare() prints a per-mode table and returns the verdict; the printed
+    # detail is what makes a failure actionable, so it is not re-derived here.
+    assert parity.compare(snapshot["v11"], snapshot["v12"])
 
 
 def _teardown(parity, config_ini, instance):

@@ -41,11 +41,18 @@ def parity_fixture(tm1):
     """
     parity = sample_module("validate_v11_v12_parity")
     built_here = not tm1.cubes.exists(parity.CUBE)
-    if built_here:
-        parity.setup_instance(tm1)
-    yield list(tm1.cubes.get_storage_dimension_order(cube_name=parity.CUBE))
-    if built_here:
-        parity.teardown_instance(tm1)
+    try:
+        # setup_instance creates the cube, then eight dimensions, then loads
+        # 300k cells. A failure anywhere in there must still be torn down —
+        # without the try, a half-built fixture never reaches the yield and is
+        # left on a shared instance. teardown_instance guards every delete with
+        # exists(), so it is safe on a partial build.
+        if built_here:
+            parity.setup_instance(tm1)
+        yield list(tm1.cubes.get_storage_dimension_order(cube_name=parity.CUBE))
+    finally:
+        if built_here:
+            parity.teardown_instance(tm1)
 
 
 @pytest.mark.parametrize("landed", [False, True], ids=["not_landed", "landed"])
