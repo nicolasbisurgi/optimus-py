@@ -1,51 +1,46 @@
-from optimuspy.results import ExecutionContext
+"""The sweep primitives and the specialist executors, driven offline.
 
-
-def test_scripted_evaluator_reproduces_ram_through_the_percent_chain(scripted):
-    # Build a bare object with just the attributes the scripted evaluator touches.
-    import types
-    from optimuspy.execution_mode import ExecutionMode
-
-    class Dummy:
-        pass
-
-    d = Dummy()
-    d.context = ExecutionContext()
-    d.mode = ExecutionMode.ITERATIONS
-    d.cube_name = "C"
-    d.view_names = []
-    d.process_names = []
-
-    ram = {("A", "B"): 100.0, ("B", "A"): 80.0}
-    log = []
-    scripted(d, lambda o: ram[o], log)
-
-    first = d._evaluate_permutation(["A", "B"], is_original_order=True)
-    second = d._evaluate_permutation(["B", "A"])
-    assert first.ram_usage == 100.0
-    assert round(second.ram_usage, 6) == 80.0          # derived via % chain
-    assert log == [["A", "B"], ["B", "A"]]
-
-
+No fake TM1: `offline_executor` builds the production classes with `tm1=None`
+and `install_offline_measurements` supplies what the server would have reported.
+Everything between those two points — the %-chain, the run artifact, the
+progress label, the frame's refusals — is the code under test.
+"""
 from optimuspy.execution_mode import ExecutionMode
-from optimuspy.results import ExecutionContext
-from optimuspy.executors import OptipyzerExecutor
+from optimuspy.order_frame import REASON_LOCKED_SLOT
+from optimuspy.executors import (
+    DimensionOptimizerExecutor, OptipyzerExecutor, PositionOptimizerExecutor)
+from tests.conftest import offline_executor
 
 
 def _bare_executor(view_names=None, process_names=None):
-    ex = object.__new__(OptipyzerExecutor)
-    ex.context = ExecutionContext()
+    # The base class is abstract about mode — every subclass sets its own — so
+    # the sweep primitives are exercised under the mode the folds run in.
+    ex = offline_executor(OptipyzerExecutor, ["A", "B", "C", "M"],
+                          view_names=view_names, process_names=process_names)
     ex.mode = ExecutionMode.ITERATIONS
-    ex.cube_name = "C"
-    ex.view_names = view_names or []
-    ex.process_names = process_names or []
-    ex.cancel_event = None
-    ex.checkpoint_manager = None
-    ex._recovered_results = {}
     return ex
 
 
-def test_sweep_into_position_evaluates_each_candidate_by_swapping(scripted):
+def test_the_percent_chain_derives_ram_from_the_servers_percentage(measure_orders):
+    # The server reports a percentage per reorder; only the first reading is
+    # absolute. Turning that chain back into RAM figures is production's job
+    # (PermutationResult -> ExecutionContext.update_ram), and this is the test
+    # that it survives a reorder sequence.
+    ex = _bare_executor()
+    ram = {("A", "B"): 100.0, ("B", "A"): 80.0}
+    log = []
+    measure_orders(ex, lambda o: ram[o], log)
+
+    first = ex._evaluate_permutation(["A", "B"], retrieve_ram=True, is_original_order=True)
+    second = ex._evaluate_permutation(["B", "A"])
+
+    assert first.ram_usage == 100.0                     # absolute read
+    assert round(second.ram_percentage_change, 6) == -20.0
+    assert round(second.ram_usage, 6) == 80.0           # derived via the % chain
+    assert log == [["A", "B"], ["B", "A"]]
+
+
+def test_sweep_into_position_evaluates_each_candidate_by_swapping(measure_orders):
     ex = _bare_executor()
     order = ["A", "B", "C", "M"]
     ram = {tuple(order): 100.0}
@@ -53,7 +48,7 @@ def test_sweep_into_position_evaluates_each_candidate_by_swapping(scripted):
     ram[("A", "C", "B", "M")] = 90.0   # B->C swap
     ram[("A", "B", "C", "M")] = 100.0
     log = []
-    scripted(ex, lambda o: ram.get(o, 100.0), log)
+    measure_orders(ex, lambda o: ram.get(o, 100.0), log)
     ex.context.set_initial_ram(100.0)
 
     results = ex._sweep_into_position(order, target_position=1, candidate_dims=["B", "C"],
@@ -61,11 +56,11 @@ def test_sweep_into_position_evaluates_each_candidate_by_swapping(scripted):
     assert [r.dimension_order for r in results] == [["A", "B", "C", "M"], ["A", "C", "B", "M"]]
 
 
-def test_sweep_into_position_honours_skip_candidate(scripted):
+def test_sweep_into_position_honours_skip_candidate(measure_orders):
     ex = _bare_executor()
     order = ["A", "B", "C", "M"]
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
     ex._sweep_into_position(order, 3, ["A", "B", "C"], total_permutations=3,
                             skip_candidate=lambda dim, pos: dim == "B")
@@ -75,11 +70,11 @@ def test_sweep_into_position_honours_skip_candidate(scripted):
     assert {o[3] for o in log} == {"A", "C"}
 
 
-def test_sweep_across_positions_evaluates_each_position_by_swapping(scripted):
+def test_sweep_across_positions_evaluates_each_position_by_swapping(measure_orders):
     ex = _bare_executor()
     order = ["A", "B", "C"]
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
 
     results = ex._sweep_across_positions(order, target_dim="A", candidate_positions=[1, 2],
@@ -87,11 +82,11 @@ def test_sweep_across_positions_evaluates_each_position_by_swapping(scripted):
     assert [r.dimension_order.index("A") for r in results] == [1, 2]
 
 
-def test_sweep_into_position_honours_skip_permutation(scripted):
+def test_sweep_into_position_honours_skip_permutation(measure_orders):
     ex = _bare_executor()
     order = ["A", "B", "C", "M"]
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
 
     # Swapping C into position 1 yields this exact permutation; block it via skip_permutation.
@@ -106,11 +101,11 @@ def test_sweep_into_position_honours_skip_permutation(scripted):
     assert ["A", "B", "C", "M"] in log
 
 
-def test_sweep_into_position_checkpoint_cb_sees_last_applied_order(scripted):
+def test_sweep_into_position_checkpoint_cb_sees_last_applied_order(measure_orders):
     ex = _bare_executor()
     order = ["A", "B", "C", "M"]
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
 
     calls = []
@@ -130,59 +125,41 @@ def test_sweep_into_position_checkpoint_cb_sees_last_applied_order(scripted):
         assert results[-1].dimension_order == log[i]
 
 
-def test_pick_best_ram(scripted):
+def test_pick_best_ram(measure_orders):
     ex = _bare_executor()
     log = []
     ram = {("A", "B"): 100.0, ("B", "A"): 70.0}
-    scripted(ex, lambda o: ram[o], log)
+    measure_orders(ex, lambda o: ram[o], log)
     ex.context.set_initial_ram(100.0)
     r1 = ex._evaluate_permutation(["A", "B"], is_original_order=True)
     r2 = ex._evaluate_permutation(["B", "A"])
     assert ex._pick_best([r1, r2], "ram").dimension_order == ["B", "A"]
 
 
-from optimuspy.executors import PositionOptimizerExecutor
-from optimuspy.order_frame import OrderFrame, REASON_LOCKED_SLOT
-
-
 def _make_position_optimizer(target_position, dims, exclude=None, last_slot_locked=False):
-    ex = object.__new__(PositionOptimizerExecutor)
-    ex.context = ExecutionContext()
-    ex.mode = ExecutionMode.ITERATIONS
-    ex.cube_name, ex.view_names, ex.process_names = "C", [], []
-    ex.cancel_event = ex.checkpoint_manager = None
-    # No TM1 handle at all: the lock is decided once by the frame, so a sweep
-    # that tried to ask the server would fail here rather than pass quietly.
-    ex.tm1 = None
-    ex.dimensions = list(dims)
-    ex.target_position = target_position
-    ex.dimensions_to_exclude = exclude or []
-    ex.order_frame = OrderFrame(dims, last_slot_locked)
-    ex.skipped_orders = {}
-    ex._resumed_results = []
-    ex._original_order_result = None
-    ex._initial_dimension_order = None
-    ex._recovered_results = {}
-    return ex
+    return offline_executor(PositionOptimizerExecutor, dims,
+                            last_slot_locked=last_slot_locked,
+                            target_position=target_position,
+                            dimensions_to_exclude=exclude or [])
 
 
-def test_position_optimizer_sweeps_all_other_dims(scripted):
+def test_position_optimizer_sweeps_all_other_dims(measure_orders):
     ex = _make_position_optimizer(0, ["A", "B", "C"])
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)  # strictly decreasing, deterministic
+    measure_orders(ex, lambda o: 100.0 - len(log), log)  # strictly decreasing, deterministic
     ex.context.set_initial_ram(100.0)
     results = ex.execute()
     # position 0 currently holds A; candidates are B and C swapped into slot 0
     assert [r.dimension_order[0] for r in results] == ["B", "C"]
 
 
-def test_position_optimizer_resume_skips_completed_dims(scripted):
+def test_position_optimizer_resume_skips_completed_dims(measure_orders):
     # "A" is already completed from a prior checkpoint and must not be re-swept.
     # The executor holds no TM1 handle, so this also pins the fact that the sweep
     # asks the server nothing at all: the lock was decided once, by the frame.
     ex = _make_position_optimizer(3, ["A", "B", "C", "D"])  # last position (index 3)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     resume_state = {"executor_state": {"position_state": {"completed_dimensions": ["A"]}}}
@@ -195,14 +172,14 @@ def test_position_optimizer_resume_skips_completed_dims(scripted):
     assert {r.dimension_order[3] for r in results} == {"B", "C"}
 
 
-def test_position_optimizer_evaluates_nothing_when_targeting_the_locked_slot(scripted):
+def test_position_optimizer_evaluates_nothing_when_targeting_the_locked_slot(measure_orders):
     # The last slot is locked, so nothing may be swept into it: every candidate
     # would move the locked dimension. The old code asked the server per candidate
     # whether IT had strings and let a numeric one through — which TM1 would then
     # have rejected, because the locked dim would have been displaced.
     ex = _make_position_optimizer(3, ["A", "B", "C", "D"], last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     results = ex.execute()
@@ -214,12 +191,12 @@ def test_position_optimizer_evaluates_nothing_when_targeting_the_locked_slot(scr
     assert ex.dimensions[3] == "D"
 
 
-def test_position_optimizer_works_normally_at_a_free_slot_on_a_locked_cube(scripted):
+def test_position_optimizer_works_normally_at_a_free_slot_on_a_locked_cube(measure_orders):
     # The lock closes one slot, not the search. Targeting any other position on
     # the same cube sweeps every candidate but the locked dimension.
     ex = _make_position_optimizer(0, ["A", "B", "C", "D"], last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     results = ex.execute()
@@ -229,68 +206,53 @@ def test_position_optimizer_works_normally_at_a_free_slot_on_a_locked_cube(scrip
     assert ex.skipped_orders == {REASON_LOCKED_SLOT: 1}  # the D-into-slot-0 candidate
 
 
-from optimuspy.executors import DimensionOptimizerExecutor
-
-
 def _make_dimension_optimizer(target_dimension, dims, last_slot_locked=False):
-    ex = object.__new__(DimensionOptimizerExecutor)
-    ex.context = ExecutionContext()
-    ex.mode = ExecutionMode.ITERATIONS
-    ex.cube_name, ex.view_names, ex.process_names = "C", [], []
-    ex.cancel_event = ex.checkpoint_manager = None
-    ex.tm1 = None
-    ex.dimensions = list(dims)
-    ex.target_dimension = target_dimension
-    ex.order_frame = OrderFrame(dims, last_slot_locked)
-    ex.skipped_orders = {}
-    ex._resumed_results = []
-    ex._original_order_result = None
-    ex._initial_dimension_order = None
-    ex._recovered_results = {}
-    return ex
+    return offline_executor(DimensionOptimizerExecutor, dims,
+                            last_slot_locked=last_slot_locked,
+                            target_dimension=target_dimension)
 
 
-def test_dimension_optimizer_sweeps_all_positions_except_current(scripted):
+def test_dimension_optimizer_sweeps_all_positions_except_current(measure_orders):
     ex = _make_dimension_optimizer("A", ["A", "B", "C"])  # A at idx 0
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
     results = ex.execute()
     # A moved into positions 1 and 2
     assert [r.dimension_order.index("A") for r in results] == [1, 2]
 
 
-def test_dimension_optimizer_never_targets_the_locked_slot(scripted):
+def test_dimension_optimizer_never_targets_the_locked_slot(measure_orders):
     # "C" is locked last, so it is not a candidate position for anything —
     # whatever the moving dimension happens to contain.
     ex = _make_dimension_optimizer("A", ["A", "B", "C"], last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
     results = ex.execute()
     assert [r.dimension_order.index("A") for r in results] == [1]
     assert all(o[-1] == "C" for o in log)
 
 
-def test_dimension_optimizer_evaluates_nothing_for_the_locked_dimension(scripted):
+def test_dimension_optimizer_evaluates_nothing_for_the_locked_dimension(measure_orders):
     # Asking to optimize the locked dimension's position has one honest answer:
     # it has none. Every move of it is refused and nothing is evaluated.
     ex = _make_dimension_optimizer("C", ["A", "B", "C"], last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
     results = ex.execute()
     assert results == []
     assert log == []
 
 
-def test_dimension_optimizer_resume_skips_completed_position(scripted):
+def test_dimension_optimizer_resume_skips_completed_position(measure_orders):
     # Position 1 is already completed from a prior checkpoint. On resume, the
     # target dim must never be re-swapped into that position — only the
     # remaining candidate position(s) get swept.
     ex = _make_dimension_optimizer("A", ["A", "B", "C"])  # A at idx 0
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     resume_state = {"executor_state": {"dimension_state": {"completed_positions": [1]}}}

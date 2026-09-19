@@ -11,10 +11,9 @@ import pytest
 
 from optimuspy.core import (_execute_set_mode, _validate_predefined_orders,
                             validate_cube_config)
-from optimuspy.execution_mode import ExecutionMode
 from optimuspy.executors import PredefinedOrderExecutor
 from optimuspy.order_frame import OrderFrame, REASON_LOCKED_SLOT
-from optimuspy.results import ExecutionContext
+from tests.conftest import offline_executor
 
 STORAGE = ["Year", "Region", "Product", "Measure"]
 LOCKED = OrderFrame(STORAGE, True)
@@ -137,30 +136,17 @@ def test_predefined_tier2_is_not_a_tier1_failure():
 
 
 def _make_predefined(orders, frame):
-    ex = object.__new__(PredefinedOrderExecutor)
-    ex.context = ExecutionContext()
-    ex.mode = ExecutionMode.ITERATIONS
-    ex.cube_name, ex.view_names, ex.process_names = "Sales", [], []
-    ex.cancel_event = ex.checkpoint_manager = None
-    ex.tm1 = None
-    ex.dimensions = list(STORAGE)
-    ex.predefined_orders = orders
-    ex.order_frame = frame
-    ex.skipped_orders = {}
-    ex._resumed_results = []
-    ex._original_order_result = None
-    ex._initial_dimension_order = None
-    ex._recovered_results = {}
-    return ex
+    return offline_executor(PredefinedOrderExecutor, STORAGE, cube_name="Sales",
+                            order_frame=frame, predefined_orders=orders)
 
 
-def test_predefined_tier2_skips_the_order_and_keeps_going(scripted):
+def test_predefined_tier2_skips_the_order_and_keeps_going(measure_orders):
     good_first = ["Region", "Year", "Product", "Measure"]
     moves_locked = ["Measure", "Year", "Region", "Product"]
     good_last = ["Product", "Region", "Year", "Measure"]
     ex = _make_predefined([good_first, moves_locked, good_last], LOCKED)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log), log)
+    measure_orders(ex, lambda o: 100.0 - len(log), log)
     ex.context.set_initial_ram(100.0)
 
     results = ex.execute()
@@ -171,11 +157,11 @@ def test_predefined_tier2_skips_the_order_and_keeps_going(scripted):
     assert ex.skipped_orders == {REASON_LOCKED_SLOT: 1}
 
 
-def test_predefined_evaluates_everything_when_there_is_no_lock(scripted):
+def test_predefined_evaluates_everything_when_there_is_no_lock(measure_orders):
     moves_last = ["Measure", "Year", "Region", "Product"]
     ex = _make_predefined([moves_last], UNLOCKED)
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
 
     results = ex.execute()

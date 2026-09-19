@@ -16,8 +16,9 @@ import types
 
 import pytest
 
-from optimuspy.execution_mode import ExecutionMode
-from optimuspy.results import ExecutionContext, PermutationResult
+from optimuspy.executors import Measurement
+from optimuspy.order_frame import OrderFrame
+from optimuspy.results import ExecutionContext
 
 
 # --- live suite plumbing ---------------------------------------------------
@@ -80,35 +81,75 @@ def is_v12(tm1):
 
 # --- offline plumbing ------------------------------------------------------
 
-def install_scripted_evaluator(executor, ram_of, evaluated_log, query_of=None):
-    """Replace executor._evaluate_permutation with a TM1-free scripted version.
+def offline_executor(cls, dimensions, *, view_names=None, process_names=None,
+                     last_slot_locked=False, order_frame=None, cube_name="C",
+                     executions=1, context=None, **kwargs):
+    """A real executor with no TM1 handle at all.
 
-    ram_of:    Callable[[tuple[str, ...]], float] -> target RAM bytes for an order.
-    query_of:  optional Callable[[tuple[str, ...]], float] -> composite query time.
-    evaluated_log: list; each evaluated permutation (list of names) is appended.
+    Built through the production constructor, so a test never keeps its own list
+    of attributes in step with `__init__`. Four hand-rolled factories used to do
+    that and all four silently lacked `_reanchor_needed` — invisible for as long
+    as the tests also replaced the method that reads it.
+
+    `tm1=None` is deliberate: a sweep that reached for the server fails here
+    rather than passing quietly against something that answers.
     """
-    view = executor.view_names[0] if executor.view_names else "__scripted__"
+    return cls(
+        None, cube_name, list(view_names or []), list(process_names or []),
+        list(dimensions), executions, last_slot_locked,
+        context=context if context is not None else ExecutionContext(),
+        order_frame=order_frame or OrderFrame(dimensions, last_slot_locked),
+        **kwargs)
 
-    def _scripted(self, permutation, retrieve_ram=False,
-                  is_original_order=False, total_permutations=None):
+
+def install_offline_measurements(executor, ram_of, evaluated_log, query_of=None):
+    """Stand in for the server's measurements only — not for anything built on them.
+
+    `_measure_permutation` is the single TM1 call in a sweep (executors.py). It
+    applies an order and reports what the server reports: a percentage change, an
+    optional absolute RAM reading, query times. Replacing it lets an offline test
+    drive a real fold and get real `PermutationResult`s back, because everything
+    downstream — the %-chain, the reanchor, the pending write, the run artifact —
+    stays production code and is exercised, not simulated.
+
+    This replaced an earlier helper that stubbed `_evaluate_permutation` whole and
+    therefore built `PermutationResult`s itself, re-deriving the percentage from
+    `context.current_ram`. That was a second copy of the chain the code under test
+    owns; it grew its own regression test, which is the point at which a test
+    helper has become a fake.
+
+    ram_of:    Callable[[tuple[str, ...]], float] -> the cube's RAM in that order.
+    query_of:  optional Callable[[tuple[str, ...]], float] -> composite query time.
+    evaluated_log: list; each order actually applied is appended.
+    """
+    view = executor.view_names[0] if executor.view_names else "__offline__"
+    # What the cube measured before the first reorder — the anchor the server's
+    # first percentage would be relative to.
+    state = {"previous": executor.context.current_ram}
+
+    def _measured(self, permutation, retrieve_ram):
         order = list(permutation)
         evaluated_log.append(order)
-        target = ram_of(tuple(order))
-        qtv = {view: [query_of(tuple(order))]} if query_of else {}
-        if is_original_order or self.context.current_ram is None:
-            return PermutationResult(
-                self.context, self.mode, self.cube_name, self.view_names,
-                self.process_names, order, qtv, None,
-                ram_usage=target, ram_percentage_change=None, reorder_duration=0.0)
-        pct = (target / self.context.current_ram - 1.0) * 100.0
-        return PermutationResult(
-            self.context, self.mode, self.cube_name, self.view_names,
-            self.process_names, order, qtv, None,
-            ram_usage=None, ram_percentage_change=pct, reorder_duration=0.0)
+        ram = float(ram_of(tuple(order)))
+        previous, state["previous"] = state["previous"], ram
+        return Measurement(
+            # The server reports the change this reorder caused, i.e. against the
+            # order the cube was in a moment ago — not against a running baseline.
+            ram_percentage_change=0.0 if not previous else (ram / previous - 1.0) * 100.0,
+            reorder_duration=0.0,
+            query_times_by_view={view: [query_of(tuple(order))]} if query_of else {},
+            # Parity with the server stand-in this replaced: process timings are
+            # supplied per-test where a test needs them.
+            process_times_by_process=None,
+            # With no anchor there is nothing for a percentage to be relative to,
+            # so the first reading is always absolute — as it is in production,
+            # where the original order is measured with retrieve_ram=True.
+            ram_usage=ram if (retrieve_ram or not previous) else None,
+        )
 
-    executor._evaluate_permutation = types.MethodType(_scripted, executor)
+    executor._measure_permutation = types.MethodType(_measured, executor)
 
 
 @pytest.fixture
-def scripted():
-    return install_scripted_evaluator
+def measure_orders():
+    return install_offline_measurements

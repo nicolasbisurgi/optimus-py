@@ -13,13 +13,13 @@ pool, and that skipping can mask a moved split — a position silently not
 searched looks the same as one correctly ranked. The full vector cannot be
 masked that way.
 
-Offline, no fake: the scripted evaluator stands in for the server, and what is
+Offline, no fake: the measure_orders evaluator stands in for the server, and what is
 under test is arithmetic over positions.
 """
 import pytest
 
 from optimuspy import tau
-from tests.conftest import install_scripted_evaluator
+from tests.conftest import install_offline_measurements
 from tests.test_fold_a import make_main_executor
 
 DIMS = ["D0", "D1", "D2", "D3", "D4", "M"]
@@ -42,7 +42,7 @@ def _run(monkeypatch, *, fast=False, **frame_kwargs):
 
     ex = make_main_executor(DIMS, CARD, fast=fast, view_names=["V"], **frame_kwargs)
     log = []
-    install_scripted_evaluator(
+    install_offline_measurements(
         ex, lambda o: 100.0 - len(log) * 0.1, log,
         query_of=lambda o: 1.0 + len(log) * 0.01)
     ex.context.set_initial_ram(100.0)

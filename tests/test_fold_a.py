@@ -1,38 +1,22 @@
-from optimuspy.execution_mode import ExecutionMode
 from optimuspy.order_frame import OrderFrame
 from optimuspy.results import ExecutionContext
 from optimuspy.executors import MainExecutor
+from tests.conftest import offline_executor
 
 
 def make_main_executor(dims, cardinality, *, fast=False,
                        view_names=None, process_names=None, last_slot_locked=False,
                        exclude=None, orders_to_ignore=None, position_rules=None):
-    ex = object.__new__(MainExecutor)
-    ex.context = ExecutionContext()
-    ex.mode = ExecutionMode.ITERATIONS
-    ex.cube_name = "C"
-    ex.view_names = view_names or []
-    ex.process_names = process_names or []
-    ex.include_process = bool(ex.process_names)
-    ex.dimensions = list(dims)
-    ex.executions = 1
-    ex.last_slot_locked = last_slot_locked
-    ex.fast = fast
-    ex.cancel_event = ex.checkpoint_manager = None
-    ex.cardinality = dict(cardinality)
-    ex.order_frame = OrderFrame(
-        dims, last_slot_locked,
-        dimensions_to_exclude=exclude,
-        orders_to_ignore=orders_to_ignore,
-        position_rules=position_rules)
-    ex.skipped_orders = {}
-    ex._resumed_results = []
-    ex._original_order_result = None
-    ex._initial_dimension_order = None
-    ex._reanchor_needed = False
-    ex._last_checkpoint = None
-    ex._recovered_results = {}
-    return ex
+    return offline_executor(
+        MainExecutor, dims,
+        view_names=view_names, process_names=process_names,
+        last_slot_locked=last_slot_locked,
+        order_frame=OrderFrame(
+            dims, last_slot_locked,
+            dimensions_to_exclude=exclude,
+            orders_to_ignore=orders_to_ignore,
+            position_rules=position_rules),
+        fast=fast, cardinality=cardinality)
 
 
 def test_main_executor_stores_cardinality_and_its_frame():
@@ -51,7 +35,7 @@ def test_main_executor_constructor_accepts_cardinality_and_frame():
     assert ex.order_frame is frame
 
 
-def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(scripted):
+def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(measure_orders):
     # 4 sparse dims + numeric measure. Dim "Big" (50000) dominates all by >> τ.
     # last_slot_locked=False keeps M fully in the swappable pool, so the true
     # back-most slot is index len(dims)-1 (not "just before" a fixed measure).
@@ -62,7 +46,7 @@ def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(scripted):
     # RAM: reward putting Big at the back.
     def ram_of(o):
         return 100.0 - (10.0 if o.index("Big") >= 3 else 0.0)
-    scripted(ex, ram_of, log)
+    measure_orders(ex, ram_of, log)
     ex.context.set_initial_ram(100.0)
 
     ex._run_fold_a()
@@ -73,12 +57,12 @@ def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(scripted):
     assert all(o.index("Big") >= 2 for o in log)
 
 
-def test_fold_a_measures_near_tied_cluster_in_full(scripted):
+def test_fold_a_measures_near_tied_cluster_in_full(measure_orders):
     dims = ["A", "B", "C", "M"]
     card = {"A": 180, "B": 205, "C": 240, "M": 3}  # A,B,C all within 4x -> nothing decided
     ex = make_main_executor(dims, card)
     log = []
-    scripted(ex, lambda o: 100.0 - len(log) * 0.1, log)
+    measure_orders(ex, lambda o: 100.0 - len(log) * 0.1, log)
     ex.context.set_initial_ram(100.0)
     ex._run_fold_a()
     # Undecided cluster -> at the first (back-most, target_position=len(dims)-1)
@@ -88,14 +72,14 @@ def test_fold_a_measures_near_tied_cluster_in_full(scripted):
     assert placed_last_nonmeasure == {"A", "B", "C"}
 
 
-def test_fold_a_never_moves_the_locked_dimension(scripted):
+def test_fold_a_never_moves_the_locked_dimension(measure_orders):
     # The storage-last dim carries string elements, so its slot is locked: no
     # evaluated order may move it, and it is never a swap candidate.
     dims = ["A", "S", "B", "C", "M"]
     card = {"A": 100, "S": 50, "B": 110, "C": 120, "M": 130}
     ex = make_main_executor(dims, card, last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0, log)  # ties -> exercise sweeps, no acceptance noise
+    measure_orders(ex, lambda o: 100.0, log)  # ties -> exercise sweeps, no acceptance noise
     ex.context.set_initial_ram(100.0)
 
     swept = []
@@ -115,7 +99,7 @@ def test_fold_a_never_moves_the_locked_dimension(scripted):
     assert set(swept) <= {"A", "S", "B", "C"}
 
 
-def test_fold_a_places_a_non_last_string_dim_by_cardinality(scripted):
+def test_fold_a_places_a_non_last_string_dim_by_cardinality(measure_orders):
     # Dimensions are shared between cubes, so "S" can carry string elements from
     # another cube's use while not being this cube's measure. The old code
     # relocated EVERY string-bearing dim to the back; the locked-slot rule leaves
@@ -125,7 +109,7 @@ def test_fold_a_places_a_non_last_string_dim_by_cardinality(scripted):
     card = {"A": 100, "S": 50, "B": 110, "C": 120, "M": 130}
     ex = make_main_executor(dims, card, last_slot_locked=True)
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
 
     swept = []
@@ -145,7 +129,7 @@ def test_fold_a_places_a_non_last_string_dim_by_cardinality(scripted):
         "the non-last string dim was never moved"
 
 
-def test_fold_a_query_front_uses_looser_tau(scripted):
+def test_fold_a_query_front_uses_looser_tau(measure_orders):
     # With a view, front (query-ranked) positions prune with tau_query (10x), not
     # tau_ram (4x). dims = [A, B, C, M], card = {A:10, B:18, C:5000, M:3}; mid=2.
     # The walk visits back position 3 (RAM-ranked) then front position 0
@@ -159,7 +143,7 @@ def test_fold_a_query_front_uses_looser_tau(scripted):
     card = {"A": 10, "B": 18, "C": 5000, "M": 3}
     ex = make_main_executor(dims, card, view_names=["V"])
     log = []
-    scripted(ex, lambda o: 100.0, log, query_of=lambda o: 1.0 + o.index("A") * 0.01)
+    measure_orders(ex, lambda o: 100.0, log, query_of=lambda o: 1.0 + o.index("A") * 0.01)
     ex.context.set_initial_ram(100.0)
     ex._run_fold_a()
     # B is swapped into the front position (index 0) only when tau_query (not
@@ -169,7 +153,7 @@ def test_fold_a_query_front_uses_looser_tau(scripted):
     assert any(o[3] == "C" for o in log)
 
 
-def test_fold_a_process_front_not_pruned(scripted):
+def test_fold_a_process_front_not_pruned(measure_orders):
     # Process-ranked front positions must NOT be tau-pruned: tau_for_position
     # returns None for "process" (cardinality cannot predict process time), so
     # fold_a_candidates returns every unplaced dim regardless of tau.
@@ -177,7 +161,7 @@ def test_fold_a_process_front_not_pruned(scripted):
     card = {"A": 10, "B": 100, "C": 5000, "M": 3}
     ex = make_main_executor(dims, card, process_names=["P"])
     log = []
-    scripted(ex, lambda o: 100.0, log)
+    measure_orders(ex, lambda o: 100.0, log)
     ex.context.set_initial_ram(100.0)
     ex._run_fold_a()
     # B (100/3 ~= 33x M) would be excluded from a RAM-ranked front frontier at
@@ -188,7 +172,7 @@ def test_fold_a_process_front_not_pruned(scripted):
     assert any(o[3] == "C" for o in log)
 
 
-def test_fold_a_freezes_excluded_dim(scripted):
+def test_fold_a_freezes_excluded_dim(measure_orders):
     # "Excl" is pinned via dimensions_to_exclude at its original index (0).
     # dimension_pool already omits it from candidacy (pre-existing behaviour),
     # but WITHOUT the occupant guard, nothing stops another candidate from
@@ -199,11 +183,14 @@ def test_fold_a_freezes_excluded_dim(scripted):
     # sweep -- exactly the kind of sweep that would otherwise swap into Excl's
     # frozen slot.
     dims = ["Excl", "D1", "D2", "D3", "M"]
-    card = {"D1": 10, "D2": 12, "D3": 5000, "M": 3}
-    ex = make_main_executor(dims, card, last_slot_locked=False)
-    ex.dimensions_to_exclude = ["Excl"]
+    # Excl sits inside the undecided cluster (10/11/12 vs M=3), so it is a
+    # genuine sweep candidate on cardinality alone — the exclusion is the only
+    # thing holding it. An Excl the tau frontier would have pruned anyway would
+    # make this test pass with the exclusion removed.
+    card = {"Excl": 11, "D1": 10, "D2": 12, "D3": 5000, "M": 3}
+    ex = make_main_executor(dims, card, last_slot_locked=False, exclude=["Excl"])
     log = []
-    scripted(ex, lambda o: 100.0 - len(log) * 0.1, log)
+    measure_orders(ex, lambda o: 100.0 - len(log) * 0.1, log)
     ex.context.set_initial_ram(100.0)
 
     ex._run_fold_a()
@@ -215,7 +202,7 @@ def test_fold_a_freezes_excluded_dim(scripted):
     assert all(o[0] == "Excl" for o in log)
 
 
-def test_fold_a_does_not_re_measure_the_occupant(scripted):
+def test_fold_a_does_not_re_measure_the_occupant(measure_orders):
     # The dim already sitting at a target position must NOT be re-swept into its
     # own slot (a redundant no-op reorder that duplicates the current order in the
     # report). Its "keep it here" value is carried by the current-order result.
@@ -226,9 +213,10 @@ def test_fold_a_does_not_re_measure_the_occupant(scripted):
     ex = make_main_executor(dims, card)
     log = []
     # Original order is uniquely lowest, so "keep" should win outright.
-    scripted(ex, lambda o: 90.0 if o == list(dims) else 100.0, log)
+    measure_orders(ex, lambda o: 90.0 if o == list(dims) else 100.0, log)
     # Mirror production: core measures the original order once and hands it in.
-    ex._original_order_result = ex._evaluate_permutation(list(dims), is_original_order=True)
+    ex._original_order_result = ex._evaluate_permutation(
+        list(dims), retrieve_ram=True, is_original_order=True)
     log.clear()
     results = ex._run_fold_a()
 

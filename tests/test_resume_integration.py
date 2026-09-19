@@ -12,7 +12,6 @@ import pytest
 
 from optimuspy.checkpoint import CheckpointManager
 from optimuspy.core import _recover_pending_order
-from optimuspy.execution_mode import ExecutionMode
 from optimuspy.executors import (MainExecutor, OriginalOrderExecutor,
                                  PredefinedOrderExecutor)
 from optimuspy.order_frame import OrderFrame
@@ -22,6 +21,14 @@ from optimuspy.results import ExecutionContext, OptimusResult
 # --------------------------------------------------------------------------- #
 # FakeTM1 — models cube RAM as a function of the current storage order and can
 # simulate a dropped connection on the Nth reorder.
+#
+# This is the suite's ONE fake and it is not a precedent. Recovery reads the cube
+# back after a crash (get_storage_dimension_order, metrics.by_cube) from OUTSIDE
+# the executor, so there is no seam to supply numbers through the way
+# install_offline_measurements does for a sweep. Its live counterpart is
+# test_live_resume_drop.py, which drives the same two branches against a real
+# server. Anything else that wants a server gets a real TM1Service or stays
+# offline — do not copy this class.
 # --------------------------------------------------------------------------- #
 class _FakeCubes:
     def __init__(self, tm1):

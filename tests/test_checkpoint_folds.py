@@ -103,7 +103,7 @@ def _run_until_crash(ex, ram_of, cutoff, install, log):
     return cm
 
 
-def test_fold_a_resume_skips_locked_positions_and_matches_best(scripted):
+def test_fold_a_resume_skips_locked_positions_and_matches_best(measure_orders):
     # 6 sparse dims + numeric measure. mid = 3, so Fold A visits back-to-front
     # positions 5, 0, 4, 1 (then breaks at mid). RAM strongly rewards E in the
     # back-most slot and M at the front, tie-broken by A early -> the greedy has
@@ -116,7 +116,7 @@ def test_fold_a_resume_skips_locked_positions_and_matches_best(scripted):
     # 1) uninterrupted reference
     ref = make_main_executor(dims, card)
     ref_log = []
-    scripted(ref, ram_of, ref_log)
+    measure_orders(ref, ram_of, ref_log)
     ref.context.set_initial_ram(ram_of(tuple(dims)))
     ref_results = ref._run_fold_a()
     original = _original_result(dims, ram_of)
@@ -126,7 +126,7 @@ def test_fold_a_resume_skips_locked_positions_and_matches_best(scripted):
     # 2) crash mid-fold: positions 5 and 0 locked, crash during position-4 sweep
     ex = make_main_executor(dims, card)
     crash_log = []
-    cm = _run_until_crash(ex, ram_of, 8, scripted, crash_log)
+    cm = _run_until_crash(ex, ram_of, 8, measure_orders, crash_log)
     with pytest.raises(OptimizationCancelled):
         ex._run_fold_a()
     executor_state = cm.last["executor_state"]
@@ -137,7 +137,7 @@ def test_fold_a_resume_skips_locked_positions_and_matches_best(scripted):
     # 3) resume a fresh executor from the captured state, mirroring core
     ex2 = make_main_executor(dims, card)
     resume_log = []
-    scripted(ex2, ram_of, resume_log)
+    measure_orders(ex2, ram_of, resume_log)
     ex2.context.set_initial_ram(ram_of(tuple(dims)))
     ex2.set_resume_context(list(dims), original, list(precrash))
 
@@ -161,7 +161,7 @@ def test_fold_a_resume_skips_locked_positions_and_matches_best(scripted):
     assert resumed_best == ref_best
 
 
-def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
+def test_fold_b_resume_is_faithful_and_does_not_regress(measure_orders):
     # Fold B coordinate descent. RAM is order-dependent and uniquely minimised by
     # [C, A, B, M] (every other order matches fewer target positions -> higher
     # RAM), so the descent converges there and it is the unambiguous best.
@@ -177,7 +177,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # 1) uninterrupted reference
     ref = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     ref_log = []
-    scripted(ref, ram_of, ref_log)
+    measure_orders(ref, ram_of, ref_log)
     ref.context.set_initial_ram(ram_of(tuple(dims)))
     ref_results = ref._run_fold_b()
     original = _original_result(dims, ram_of)
@@ -194,7 +194,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     # pass-1 sweep, whose anchor is already the optimum -> pass_index==1, anchor==
     # target. (Reserving the string dim's last slot narrows each numeric dim's
     # candidate positions, so the whole descent is 9 evals; 7 lands in pass 1.)
-    cm = _run_until_crash(ex, ram_of, 7, scripted, crash_log)
+    cm = _run_until_crash(ex, ram_of, 7, measure_orders, crash_log)
     with pytest.raises(OptimizationCancelled):
         ex._run_fold_b()
     executor_state = cm.last["executor_state"]
@@ -209,7 +209,7 @@ def test_fold_b_resume_is_faithful_and_does_not_regress(scripted):
     #    current_order's metric is found (not float('inf')).
     ex2 = make_main_executor(dims, card, fast=True, last_slot_locked=True)
     resume_log = []
-    scripted(ex2, ram_of, resume_log)
+    measure_orders(ex2, ram_of, resume_log)
     ex2.context.set_initial_ram(ram_of(tuple(dims)))
     ex2.set_resume_context(list(dims), original, list(precrash))
     resumed_results = ex2._run_fold_b({"executor_state": executor_state})

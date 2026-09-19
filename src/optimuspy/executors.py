@@ -2,7 +2,7 @@ import logging
 import random
 import time
 from itertools import chain
-from typing import List, Dict
+from typing import Dict, List, NamedTuple, Optional
 
 from TM1py import TM1Service, Process
 
@@ -15,6 +15,20 @@ from optimuspy.results import ExecutionContext, PermutationResult
 
 class OptimizationCancelled(Exception):
     pass
+
+
+class Measurement(NamedTuple):
+    """What applying one candidate order to the cube produced.
+
+    The server's own report, nothing derived: `ram_percentage_change` is what
+    `update_storage_dimension_order` returned, and `ram_usage` is an absolute
+    byte reading taken only when one was asked for.
+    """
+    ram_percentage_change: float
+    reorder_duration: float
+    query_times_by_view: dict
+    process_times_by_process: Optional[dict] = None
+    ram_usage: Optional[float] = None
 
 
 def swap(order: list, i1, i2) -> List[str]:
@@ -172,27 +186,41 @@ class OptipyzerExecutor:
             reanchor = True
             self._reanchor_needed = False
 
-        reorder_start = time.time()
-        ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(self.cube_name, permutation)
-        reorder_duration = time.time() - reorder_start
-        query_times_by_view = self._determine_query_permutation_result()
-
-        process_times_by_process = None
-        if self.include_process:
-            process_times_by_process = self._determine_process_permutation_result()
-
-        ram_usage = None
-        if retrieve_ram:
-            ram_usage = self._retrieve_ram_usage()
+        measurement = self._measure_permutation(permutation, retrieve_ram)
 
         permutation_result = PermutationResult(
             self.context, self.mode, self.cube_name, self.view_names, self.process_names,
-            permutation, query_times_by_view, process_times_by_process, ram_usage,
-            ram_percentage_change, reorder_duration, reanchor=reanchor)
+            permutation, measurement.query_times_by_view,
+            measurement.process_times_by_process, measurement.ram_usage,
+            measurement.ram_percentage_change, measurement.reorder_duration,
+            reanchor=reanchor)
 
         logging.info(f"{progress_label} - Result: {permutation_result.stats_summary()}")
 
         return permutation_result
+
+    def _measure_permutation(self, permutation: List[str], retrieve_ram: bool) -> Measurement:
+        """Apply the order to the cube and measure it — the only TM1 call in a sweep.
+
+        Everything `_evaluate_permutation` does around this call is arithmetic and
+        bookkeeping: the pending write, the reanchor decision, the %-chain that
+        turns the server's percentage into a RAM figure, the run artifact, the
+        progress log. Keeping the server behind one method is what lets an offline
+        test drive a real fold and get real PermutationResults back — it supplies
+        the numbers a server would have reported and nothing else is stood in for.
+        """
+        reorder_start = time.time()
+        ram_percentage_change = self.tm1.cubes.update_storage_dimension_order(
+            self.cube_name, permutation)
+        reorder_duration = time.time() - reorder_start
+
+        query_times_by_view = self._determine_query_permutation_result()
+        process_times_by_process = (
+            self._determine_process_permutation_result() if self.include_process else None)
+        ram_usage = self._retrieve_ram_usage() if retrieve_ram else None
+
+        return Measurement(ram_percentage_change, reorder_duration,
+                           query_times_by_view, process_times_by_process, ram_usage)
 
     def _retrieve_ram_usage(self):
         # RAM baseline in bytes via MetricService (cube_memory_used), version-agnostic.

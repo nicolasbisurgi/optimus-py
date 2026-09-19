@@ -12,7 +12,7 @@ import pytest
 
 from optimuspy.core import _validate_position_rules
 from optimuspy.order_frame import OrderFrame, REASON_POSITION_RULE
-from tests.conftest import install_scripted_evaluator
+from tests.conftest import install_offline_measurements
 from tests.test_fold_a import make_main_executor
 
 STORAGE = ["Year", "Region", "Product", "Account", "Measure"]
@@ -107,7 +107,7 @@ def test_admits_still_refuses_an_order_that_moves_a_pinned_dim():
 def _run(fast, rules, **kwargs):
     ex = make_main_executor(STORAGE, CARD, fast=fast, position_rules=rules, **kwargs)
     log = []
-    install_scripted_evaluator(ex, lambda o: 100.0 - len(log) * 0.1, log)
+    install_offline_measurements(ex, lambda o: 100.0 - len(log) * 0.1, log)
     ex.context.set_initial_ram(100.0)
     ex.execute()
     return ex, log
