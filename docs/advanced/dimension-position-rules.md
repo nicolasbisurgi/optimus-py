@@ -39,7 +39,7 @@ OptimusPy:
 3. Runs greedy on the remaining N - (number of locked dims) positions.
 4. Skips and logs any candidate order that would violate a rule.
 
-The skip messages are logged at DEBUG level (suppressed by default). The result count reflects only the orders that were actually evaluated.
+The skip messages are logged at DEBUG level, which is off by default — run with `-v` to see them (see [Optimization Logging](../concepts/how-it-works.md#optimization-logging)). The result count reflects only the orders that were actually evaluated.
 
 ## Interaction with `dimensions_to_exclude`
 

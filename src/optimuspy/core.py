@@ -69,14 +69,27 @@ def get_logfile_path() -> Path:
     return logs_dir / LOGFILE
 
 
-def configure_logging():
+def configure_logging(verbose: bool = False):
+    """Send INFO (or DEBUG under --verbose) to the logfile and to stdout.
+
+    `verbose` is the only way to reach a DEBUG line. Every order the frame
+    refuses is reported there — the locked slot, an ignored order, a position
+    rule — so "why was my order skipped?" is answerable at -v and nowhere else.
+    """
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         filename=LOGFILE,
         format="%(asctime)s - " + APP_NAME + " - %(levelname)s - %(message)s",
-        level=logging.INFO,
+        level=level,
     )
-    # also log to stdout
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    # basicConfig is a no-op once the root logger has handlers, so set the level
+    # explicitly: -v must work regardless of what configured logging first.
+    root = logging.getLogger()
+    root.setLevel(level)
+    # also log to stdout, once
+    if not any(isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout
+               for h in root.handlers):
+        root.addHandler(logging.StreamHandler(sys.stdout))
 
 
 def get_tm1_config(config_ini_path: str):

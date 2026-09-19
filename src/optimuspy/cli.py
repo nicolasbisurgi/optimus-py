@@ -136,7 +136,6 @@ def main():
         set_current_directory()
 
     print_banner()
-    configure_logging()
 
     parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
     parser.add_argument('mode', choices=['optimize', 'set', 'scan', 'optimize-db'],
@@ -147,6 +146,9 @@ def main():
                         help="Path to cube JSON configuration file (required for optimize/set)")
     parser.add_argument('--config', dest='config_ini', default=None,
                         help="Path to TM1 connection config.ini (default: config/config.ini)")
+    parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,
+                        help="Log at DEBUG level — includes the reason every skipped "
+                             "dimension order was refused")
     parser.add_argument('-p', '--password', dest='password', default=None,
                         help="TM1 password (overrides config.ini)")
     parser.add_argument('--no-resume', dest='no_resume', action='store_true', default=False,
@@ -173,6 +175,9 @@ def main():
                              "(optimize-db only)")
 
     cmd_args = parser.parse_args()
+    # After parse_args, so --verbose can set the level. Nothing above this line
+    # logs; argparse reports its own errors on stderr and exits.
+    configure_logging(verbose=cmd_args.verbose)
 
     try:
         config_location = resolve_config_path(cmd_args.config_ini)

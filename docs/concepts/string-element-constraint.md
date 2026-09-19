@@ -22,13 +22,13 @@ The cached **dimension intelligence** in the UI surfaces this with a "has string
 
 ## What gets skipped
 
-During greedy / position / dimension optimization, swap candidates that would put a string-bearing dimension anywhere except last are silently skipped. The skipped order does **not** appear in the result count.
+During greedy / position / dimension optimization, any candidate order that would move the locked dimension out of the last slot is skipped. The skipped order does **not** appear in the result count.
 
 ```
-Skipping order due to string element constraint: ['Time', 'Region', 'Measures', ...]
+Skipping order — 'Measures' has string elements and is locked to the last position; this order moves it to position 0
 ```
 
-This message is logged at DEBUG level (suppressed by default) — see [Optimization Logging](../concepts/how-it-works.md) for verbose output.
+This message is logged at DEBUG level, which is off by default — run with `-v` to see it. See [Optimization Logging](how-it-works.md#optimization-logging). At INFO you get only the per-cube count.
 
 ## When the last position is a string dim
 

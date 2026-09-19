@@ -65,3 +65,33 @@ OptimusPy:
 3. Restores the original VMM/VMT in the `finally` block.
 
 [Why VMM/VMT matters → VMM/VMT Handling](vmm-vmt-handling.md)
+
+## Optimization logging
+
+OptimusPy writes to `logs/optimuspy.log` and to stdout at the same time. Two levels are used:
+
+| Level | What it carries | Default |
+|---|---|---|
+| `INFO` | The run: each order tested, the RAM figure, the locked slot when one is detected, the final report, and a count of how many orders were skipped and why | on |
+| `DEBUG` | One line per **skipped** order, naming the reason the order was refused | off — pass `-v` |
+
+```bash
+optimuspy optimize config/sales.json -v
+```
+
+A run that skips orders says so at INFO, but only as a count:
+
+```
+Skipped 6 candidate orders for cube 'Sales' (2 ignored_order, 4 locked_slot)
+```
+
+`-v` turns each of those into a line that names the order and the reason:
+
+```
+Skipping order — 'Measures' has string elements and is locked to the last position; this order moves it to position 0
+Skipping order — order is listed in orders_to_ignore: ['Time', 'Region', 'Product', 'Measures']
+```
+
+The reason codes are stable and greppable: `locked_slot`, `ignored_order`, `position_rule`. Use `-v` when an order you expected to be tested does not appear in the results — the skip line is the only place the reason is recorded.
+
+`-v` also preserves the Python traceback when a run fails with a configuration error. Without it you get the message alone, which is the right output for a TI process calling OptimusPy through `ExecuteCommand` but not enough to diagnose an unexpected failure.
