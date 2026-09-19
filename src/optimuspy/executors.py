@@ -30,17 +30,21 @@ def swap_random(order: list) -> List[str]:
 
 class OptipyzerExecutor:
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
-                 displayed_dimension_order: List[str],
-                 executions: int, measure_dimension_only_numeric: bool, context: ExecutionContext,
+                 storage_dimension_order: List[str],
+                 executions: int, last_slot_locked: bool, context: ExecutionContext,
                  checkpoint_manager=None, process_parameters: dict = None, cancel_event=None,
                  is_v12: bool = False):
         self.tm1 = tm1
         self.cube_name = cube_name
         self.view_names = view_names
         self.process_names = process_names
-        self.dimensions = displayed_dimension_order
+        # The cube's authoritative order (get_storage_dimension_order). Executors
+        # permute THIS; the presentation order is display-only.
+        self.dimensions = storage_dimension_order
         self.executions = executions
-        self.measure_dimension_only_numeric = measure_dimension_only_numeric
+        # True when the dimension in the last storage slot has string elements:
+        # that slot is locked and its dimension never moves.
+        self.last_slot_locked = last_slot_locked
         self.is_v12 = is_v12
         self.mode = None
         self.include_process = bool(process_names)
@@ -338,11 +342,11 @@ class OptipyzerExecutor:
 class OriginalOrderExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int,
-                 measure_dimension_only_numeric: bool, original_dimension_order: List[str],
+                 last_slot_locked: bool, original_dimension_order: List[str],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
                  cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
+                         last_slot_locked, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ORIGINAL_ORDER
         self.original_dimension_order = original_dimension_order
@@ -358,7 +362,7 @@ class OriginalOrderExecutor(OptipyzerExecutor):
 
 class MainExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
-                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 dimensions: List[str], executions: int, last_slot_locked: bool,
                  context: ExecutionContext, fast: bool = False,
                  dimensions_to_exclude: List[str] = None,
                  orders_to_ignore: List[List[str]] = None,
@@ -366,7 +370,7 @@ class MainExecutor(OptipyzerExecutor):
                  dimension_position_rules: list = None, cancel_event=None, is_v12: bool = False,
                  cardinality: Dict[str, int] = None, string_dims: List[str] = None):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
+                         last_slot_locked, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.fast = fast
@@ -420,7 +424,7 @@ class MainExecutor(OptipyzerExecutor):
         permutation_results = []
         dimension_pool = [d for d in self.dimensions if d not in self.dimensions_to_exclude]
         mid = int(len(dimension_pool) / 2)
-        if not self.measure_dimension_only_numeric:
+        if self.last_slot_locked:
             # Lock the string-bearing dim to the last slot using the authoritative
             # string_dims set — NOT presentation-order [-1], which need not be the
             # string dim on an already-optimized cube. Move it last if it isn't,
@@ -641,11 +645,11 @@ class MainExecutor(OptipyzerExecutor):
 class PredefinedOrderExecutor(OptipyzerExecutor):
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
                  dimensions: List[str], executions: int,
-                 measure_dimension_only_numeric: bool, predefined_orders: List[List[str]],
+                 last_slot_locked: bool, predefined_orders: List[List[str]],
                  context: ExecutionContext, checkpoint_manager=None, process_parameters: dict = None,
                  cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
+                         last_slot_locked, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.predefined_orders = predefined_orders
@@ -697,12 +701,12 @@ class PositionOptimizerExecutor(OptipyzerExecutor):
     """Find the best dimension for a given position."""
 
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
-                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 dimensions: List[str], executions: int, last_slot_locked: bool,
                  target_position: int, context: ExecutionContext,
                  dimensions_to_exclude: List[str] = None, checkpoint_manager=None,
                  process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
+                         last_slot_locked, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.target_position = target_position
@@ -749,11 +753,11 @@ class DimensionOptimizerExecutor(OptipyzerExecutor):
     """Find the best position for a given dimension."""
 
     def __init__(self, tm1: TM1Service, cube_name: str, view_names: List[str], process_names: List[str],
-                 dimensions: List[str], executions: int, measure_dimension_only_numeric: bool,
+                 dimensions: List[str], executions: int, last_slot_locked: bool,
                  target_dimension: str, context: ExecutionContext, checkpoint_manager=None,
                  process_parameters: dict = None, cancel_event=None, is_v12: bool = False):
         super().__init__(tm1, cube_name, view_names, process_names, dimensions, executions,
-                         measure_dimension_only_numeric, context, checkpoint_manager, process_parameters,
+                         last_slot_locked, context, checkpoint_manager, process_parameters,
                          cancel_event, is_v12=is_v12)
         self.mode = ExecutionMode.ITERATIONS
         self.target_dimension = target_dimension

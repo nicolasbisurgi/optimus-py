@@ -4,7 +4,7 @@ from optimuspy.executors import MainExecutor
 
 
 def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
-                       view_names=None, process_names=None, measure_only_numeric=True):
+                       view_names=None, process_names=None, last_slot_locked=False):
     ex = object.__new__(MainExecutor)
     ex.context = ExecutionContext()
     ex.mode = ExecutionMode.ITERATIONS
@@ -15,7 +15,7 @@ def make_main_executor(dims, cardinality, *, fast=False, string_dims=None,
     ex.dimensions = list(dims)
     ex.cube_dim_number = len(dims)
     ex.executions = 1
-    ex.measure_dimension_only_numeric = measure_only_numeric
+    ex.last_slot_locked = last_slot_locked
     ex.fast = fast
     ex.dimensions_to_exclude = []
     ex.orders_to_ignore = []
@@ -41,7 +41,7 @@ def test_main_executor_stores_cardinality_and_string_dims():
 def test_main_executor_constructor_accepts_cardinality_kwargs():
     ex = MainExecutor(
         tm1=None, cube_name="C", view_names=[], process_names=[],
-        dimensions=["A", "B"], executions=1, measure_dimension_only_numeric=True,
+        dimensions=["A", "B"], executions=1, last_slot_locked=False,
         context=ExecutionContext(), cardinality={"A": 10, "B": 20}, string_dims=["B"])
     assert ex.cardinality == {"A": 10, "B": 20}
     assert ex.string_dims == {"B"}
@@ -49,11 +49,11 @@ def test_main_executor_constructor_accepts_cardinality_kwargs():
 
 def test_fold_a_pins_dominant_dim_to_back_with_one_reorder(scripted):
     # 4 sparse dims + numeric measure. Dim "Big" (50000) dominates all by >> τ.
-    # measure_only_numeric=True keeps M fully in the swappable pool, so the true
+    # last_slot_locked=False keeps M fully in the swappable pool, so the true
     # back-most slot is index len(dims)-1 (not "just before" a fixed measure).
     dims = ["D1", "D2", "D3", "Big", "M"]
     card = {"D1": 100, "D2": 120, "D3": 150, "Big": 50000, "M": 3}
-    ex = make_main_executor(dims, card, measure_only_numeric=True)
+    ex = make_main_executor(dims, card, last_slot_locked=False)
     log = []
     # RAM: reward putting Big at the back.
     def ram_of(o):
@@ -94,7 +94,7 @@ def test_fold_a_freezes_string_dim_last_even_when_not_presentation_last(scripted
     # and freezes it there.
     dims = ["A", "S", "B", "C", "D"]
     card = {"A": 100, "S": 50, "B": 110, "C": 120, "D": 130}
-    ex = make_main_executor(dims, card, string_dims=["S"], measure_only_numeric=False)
+    ex = make_main_executor(dims, card, string_dims=["S"], last_slot_locked=True)
     log = []
     scripted(ex, lambda o: 100.0, log)  # ties -> exercise sweeps, no acceptance noise
     ex.context.set_initial_ram(100.0)
@@ -173,7 +173,7 @@ def test_fold_a_freezes_excluded_dim(scripted):
     # frozen slot.
     dims = ["Excl", "D1", "D2", "D3", "M"]
     card = {"D1": 10, "D2": 12, "D3": 5000, "M": 3}
-    ex = make_main_executor(dims, card, measure_only_numeric=True)
+    ex = make_main_executor(dims, card, last_slot_locked=False)
     ex.dimensions_to_exclude = ["Excl"]
     log = []
     scripted(ex, lambda o: 100.0 - len(log) * 0.1, log)

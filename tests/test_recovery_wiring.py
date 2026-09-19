@@ -62,7 +62,7 @@ def test_predefined_injects_recovered_without_reapplying(scripted):
     orders = [["A", "B"], ["B", "A"]]
     ex = PredefinedOrderExecutor(
         tm1=None, cube_name="C", view_names=[], process_names=[],
-        dimensions=["A", "B"], executions=1, measure_dimension_only_numeric=True,
+        dimensions=["A", "B"], executions=1, last_slot_locked=False,
         predefined_orders=orders, context=ExecutionContext())
     log = []
     ram_of = lambda o: 100.0

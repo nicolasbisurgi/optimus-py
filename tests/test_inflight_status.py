@@ -51,7 +51,7 @@ def _original(dims):
 def _make_executor(orders, cm, *, raise_on_reorder=False):
     ex = PredefinedOrderExecutor(
         tm1=_FakeTM1(raise_on_reorder), cube_name="C", view_names=[], process_names=[],
-        dimensions=["A", "B"], executions=1, measure_dimension_only_numeric=True,
+        dimensions=["A", "B"], executions=1, last_slot_locked=False,
         predefined_orders=orders, context=ExecutionContext(), checkpoint_manager=cm)
     ex._retrieve_ram_usage = types.MethodType(lambda self: 1000.0, ex)
     ex.context.set_initial_ram(1000.0)  # baseline as restored from a checkpoint

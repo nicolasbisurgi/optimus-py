@@ -49,9 +49,9 @@ PRESENTATION_ORDER = [
 
 
 def test_seed_does_not_force_numeric_measure_last():
-    # All dimensions are numeric-only, so measure_only_numeric=True (the flag is
+    # All dimensions are numeric-only, so last_slot_locked=False (the flag is
     # derived from the storage-order last dim, PDT, which is numeric).
-    ex = make_main_executor(PRESENTATION_ORDER, CARD, fast=True, measure_only_numeric=True)
+    ex = make_main_executor(PRESENTATION_ORDER, CARD, fast=True, last_slot_locked=False)
 
     seed = ex._seed_order()
 

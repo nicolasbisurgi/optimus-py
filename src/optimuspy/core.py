@@ -384,7 +384,6 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
         original_vmm, original_vmt = retrieve_vmm_vmt(tm1, cube_name)
         write_vmm_vmt(tm1, cube_name, "1000000", "1000000")
 
-    displayed_dimension_order = tm1.cubes.get_dimension_names(cube_name=cube_name)
     # The live storage order (may be a crashed/reordered state); used only to
     # validate the checkpoint by dimension SET. The true original is sourced from
     # the checkpoint on resume (see below), never from this reordered read.
@@ -440,18 +439,24 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
         logging.info("--no-resume specified — ignoring existing checkpoint")
         checkpoint_mgr.remove()
 
-    # Determine the measure (string-last) rule from the RESOLVED original order —
+    # The locked slot: if the dimension in the last position of the STORAGE order
+    # carries string elements, that position is locked and the dimension never
+    # moves (TM1 rejects the write regardless). Resolved from the ORIGINAL order —
     # on resume that is the checkpoint's original, not the reordered live cube,
-    # whose last dim need not be the measure.
-    measure_dimension_only_numeric = is_dimension_only_numeric(tm1, initial_dimension_order[-1])
+    # whose last dim need not be the one the lock keys off.
+    last_slot_locked = not is_dimension_only_numeric(tm1, initial_dimension_order[-1])
+    if last_slot_locked:
+        logging.info(
+            f"Last slot locked for cube '{cube_name}': dimension "
+            f"'{initial_dimension_order[-1]}' has string elements and never moves")
 
     with ram_source_ready(tm1, is_v12):
         try:
             # Benchmark original order (skip if resumed)
             if original_order_result is None:
                 original_executor = OriginalOrderExecutor(
-                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, initial_dimension_order, context,
+                    tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
+                    last_slot_locked, initial_dimension_order, context,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     cancel_event=cancel_event, is_v12=is_v12)
                 permutation_results += original_executor.execute()
@@ -468,38 +473,38 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
 
             # Run iterations: targeted, predefined, or greedy algorithm
             if optimize_position is not None:
-                resolved_pos = resolve_position(optimize_position, len(displayed_dimension_order))
+                resolved_pos = resolve_position(optimize_position, len(initial_dimension_order))
                 logging.info(f"Optimizing position {resolved_pos + 1} (0-based: {resolved_pos}) "
                              f"for cube '{cube_name}'")
                 executor = PositionOptimizerExecutor(
-                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, resolved_pos, context, dimensions_to_exclude,
+                    tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
+                    last_slot_locked, resolved_pos, context, dimensions_to_exclude,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     cancel_event=cancel_event, is_v12=is_v12)
             elif optimize_dimension:
-                if optimize_dimension not in displayed_dimension_order:
+                if optimize_dimension not in initial_dimension_order:
                     raise ValueError(
                         f"Dimension '{optimize_dimension}' not found in cube '{cube_name}'. "
-                        f"Available: {displayed_dimension_order}")
+                        f"Available: {initial_dimension_order}")
                 logging.info(f"Optimizing dimension '{optimize_dimension}' for cube '{cube_name}'")
                 executor = DimensionOptimizerExecutor(
-                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, optimize_dimension, context,
+                    tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
+                    last_slot_locked, optimize_dimension, context,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     cancel_event=cancel_event, is_v12=is_v12)
             elif predefined_orders:
                 executor = PredefinedOrderExecutor(
-                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, predefined_orders, context,
+                    tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
+                    last_slot_locked, predefined_orders, context,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     cancel_event=cancel_event, is_v12=is_v12)
             else:
-                dimensions_metadata = _collect_dimension_metadata(tm1, displayed_dimension_order)
+                dimensions_metadata = _collect_dimension_metadata(tm1, initial_dimension_order)
                 cardinality = {d["name"]: d["leaf_elements"] for d in dimensions_metadata}
                 string_dims = [d["name"] for d in dimensions_metadata if d["has_strings"]]
                 executor = MainExecutor(
-                    tm1, cube_name, view_names, process_names, displayed_dimension_order, executions,
-                    measure_dimension_only_numeric, context, fast, dimensions_to_exclude, orders_to_ignore,
+                    tm1, cube_name, view_names, process_names, initial_dimension_order, executions,
+                    last_slot_locked, context, fast, dimensions_to_exclude, orders_to_ignore,
                     checkpoint_manager=checkpoint_mgr, process_parameters=process_parameters,
                     dimension_position_rules=dimension_position_rules, cancel_event=cancel_event,
                     is_v12=is_v12, cardinality=cardinality, string_dims=string_dims)

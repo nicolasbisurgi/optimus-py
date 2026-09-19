@@ -269,7 +269,7 @@ def test_fold_b_never_evicts_string_measure_from_last_slot(scripted):
     dims = ["A", "B", "X", "Y", "S"]
     card = {"A": 1, "B": 15, "X": 8000, "Y": 9000, "S": 50}
     ex = make_main_executor(dims, card, fast=True, string_dims=["S"],
-                            measure_only_numeric=False)
+                            last_slot_locked=True)
     log = []
     # RAM rewards the largest dim last -> maximal pressure to evict the small S.
     ram_of = lambda o: 100.0 - {"Y": 10.0, "X": 9.0}.get(list(o)[-1], 0.0)
