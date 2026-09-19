@@ -32,7 +32,7 @@ Exactly one of these may be set. They're mutually exclusive.
 | Field | Type | Used by |
 |---|---|---|
 | `predefined_orders` | array of arrays of strings | [Predefined mode](../modes/predefined-orders.md) |
-| `optimize_position` | string or integer | [Position mode](../modes/position-optimization.md) |
+| `optimize_position` | string or integer | [Position mode](../modes/position-optimization.md). **1-based** — see the note below. |
 | `optimize_dimension` | string | [Dimension mode](../modes/dimension-optimization.md) |
 
 ## Optional fields — constraints
@@ -40,7 +40,15 @@ Exactly one of these may be set. They're mutually exclusive.
 | Field | Type | Description |
 |---|---|---|
 | `orders_to_ignore` | array of arrays of strings | Skip these orders during greedy search. Ignored in predefined mode. |
-| `dimension_position_rules` | array of objects | Lock dims to specific positions. See [Dimension Position Rules](dimension-position-rules.md). |
+| `dimension_position_rules` | array of objects | Lock dims to specific positions. **0-based** — see the note below. See [Dimension Position Rules](dimension-position-rules.md). |
+
+!!! warning "The two position fields count from different origins"
+
+    `optimize_position` is **1-based**: `3` is the third slot. `dimension_position_rules[].position` is **0-based**: `3` is the fourth slot. Each matches its own documentation and has always behaved that way, so neither is a defect — but they are not the same scale, and a config that uses both needs converting between them. `"first"` and `"last"` are accepted by both and mean the same thing in each.
+
+## Which order a position counts against
+
+Every position — `optimize_position` and `dimension_position_rules[].position` alike — resolves against the cube's **storage** order (`get_storage_dimension_order()`), not the presentation order shown in Architect. The two are identical on most cubes and differ on ones that have already been reordered; the storage order is the one that determines RAM and query behaviour, and is the only order OptimusPy's engine reasons about.
 
 ## Validation rules
 

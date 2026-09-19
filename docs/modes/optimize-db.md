@@ -112,7 +112,7 @@ The planner is the single authority on what is skipped and why. Every skipped cu
 | `already_in_target_order` | The storage order already matches the heuristic. |
 
 !!! warning "`skip_any` can skip a meaningful share of the model"
-    The default `string_policy` of `skip_any` excludes every cube that has any string elements, which in a reporting-heavy model can be a large fraction of total RAM. The plan reports exactly how much: check the `string_elements` line of the skip ledger and the coverage percentage before accepting the default. `pin_last` brings the single-string-dimension cubes back into scope. See [String Element Constraint](../concepts/string-element-constraint.md).
+    The default `string_policy` of `skip_any` excludes every cube that has any string elements, which in a reporting-heavy model can be a large fraction of total RAM. The plan reports exactly how much: check the `string_elements` line of the skip ledger and the coverage percentage before accepting the default. `pin_last` brings the single-string-dimension cubes back into scope. See [The Locked Slot](../concepts/string-element-constraint.md).
 
 ## The time budget
 

@@ -32,6 +32,12 @@ Multiple rules may target different dimensions; they cannot target the same posi
 
 A `position` must be a JSON number, not a string: write `3`, not `"3"`. Both name the same slot, so OptimusPy says exactly that rather than reporting an unreadable position at a value you can see is a number.
 
+!!! warning "0-based here, 1-based in `optimize_position`"
+
+    `position` counts from **0**: `3` is the fourth slot. The separate [`optimize_position`](../modes/position-optimization.md) field counts from **1**, where `3` is the third slot. Each matches its own long-standing documentation, so neither is a defect — but if you use both fields in one config, convert between them. `"first"` and `"last"` mean the same thing in both.
+
+Positions count against the cube's **storage** order (`get_storage_dimension_order()`), not the presentation order shown in Architect.
+
 ## Interaction with greedy search
 
 OptimusPy:
