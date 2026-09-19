@@ -12,7 +12,10 @@ They connect with a real `TM1Service`; there is deliberately no fake to fall
 back on, so a live test that cannot reach its server skips rather than passing
 against a simulation.
 """
+import importlib
+import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +33,12 @@ def pytest_addoption(parser):
     parser.addoption(
         "--tm1-config", action="store", default="config/config.ini",
         help="path to the config.ini holding the --instance section")
+    parser.addoption(
+        "--v11", action="store", default=None,
+        help="config.ini section for the v11 instance (the cross-version parity gate)")
+    parser.addoption(
+        "--v12", action="store", default=None,
+        help="config.ini section for the v12 instance (the cross-version parity gate)")
 
 
 @pytest.fixture(scope="session")
@@ -70,6 +79,21 @@ def tm1(tm1_connection_args):
         pytest.skip(f"cannot reach TM1: {e}")
     with service:
         yield service
+
+
+def sample_module(name):
+    """Import one of the samples/ scripts as a module.
+
+    The live smoke and parity runs were written there first, as argparse CLIs
+    that pytest never collected. Promoting them into the suite means calling
+    into them, not copying them — there is one fixture-cube builder and one
+    crash-and-resume scenario, and it stays in samples/ where it can also be run
+    by hand against an instance that is misbehaving.
+    """
+    samples = Path(__file__).resolve().parent.parent / "samples"
+    if str(samples) not in sys.path:
+        sys.path.insert(0, str(samples))
+    return importlib.import_module(name)
 
 
 @pytest.fixture(scope="session")
