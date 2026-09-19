@@ -294,7 +294,6 @@ def test_fold_b_resume_skips_seed_and_completed_passes(scripted):
 
     resumed_order = ["C", "B", "M", "A"]
     resume_state = {"executor_state": {"fold_b_state": {
-        "seed_order": ["A", "B", "C", "M"],
         "current_order": list(resumed_order),
         "pass_index": 1,  # only the last of FOLD_B_MAX_PASSES=2 remains
     }}}
