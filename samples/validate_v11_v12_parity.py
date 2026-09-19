@@ -41,6 +41,7 @@ import argparse
 import csv
 import glob
 import json
+import logging
 import os
 import sys
 import time
@@ -66,6 +67,21 @@ from optimuspy.metrics import (  # noqa: E402
 _SETTLE_ATTEMPTS = 24
 _SETTLE_WAIT_SECONDS = 10
 _SETTLE_TOLERANCE = 0.01
+
+# Post-fill gate (see _wait_until_the_gauge_leaves_the_skeleton). A loaded fixture
+# reads 40-67 MB against a ~40 KB empty-cube skeleton, so 4x is far clear of
+# sampling noise while still being unambiguous about "this is not the empty cube".
+_GAUGE_SKELETON_FACTOR = 4
+# Only used when the empty cube reports no metric at all and there is no skeleton
+# reading to scale from.
+_GAUGE_LOADED_FLOOR_BYTES = 1_000_000
+
+# Two orders count as tied when their measured RAM differs by less than this
+# fraction. The gate compares each version's winner against the OTHER version's
+# winner using that version's own numbers, so this is a within-run tolerance on a
+# single %-chain, not a cross-server one. It is tighter than the product's own
+# best-result banding (1%/2.5%/5% of the measured range in determine_best_result).
+_TIE_TOLERANCE = 0.005
 
 # --- Fixture definition -----------------------------------------------------
 
@@ -148,11 +164,86 @@ def _ti_fill_prolog():
     return lines
 
 
+def read_gauge_bytes(tm1: TM1Service):
+    """One raw cube_memory_used sample in bytes, or None if the metric is absent.
+
+    No settling, no retry — the callers here want the instantaneous reading so
+    they can watch it move.
+    """
+    rows = tm1.metrics.by_cube(cube=CUBE)
+    row = next((r for r in rows
+                if r.get("Metric") == CUBE_MEMORY_METRIC and r.get("Value") is not None), None)
+    return None if row is None else unit_to_bytes(row.get("Value"), row.get("Unit"))
+
+
+def _wait_until_the_gauge_leaves_the_skeleton(tm1: TM1Service, skeleton):
+    """Block until cube_memory_used reflects the fill, or fail the setup.
+
+    This is the gate that stops the whole comparison running against a frozen
+    gauge. On v12 cube_memory_used is sampled, and after this fixture's 300k-cell
+    load it has been observed reporting the empty-cube skeleton (~40 KB) for
+    around five minutes — long enough to cover several complete mode runs. A run
+    in that state measures every permutation at the same value, picks a winner by
+    tie-break, and prints a RAM column that looks entirely ordinary. The two
+    versions then disagree for a reason that has nothing to do with OptimusPy.
+
+    The threshold is measured, not guessed: `skeleton` is this same gauge read on
+    the cube we just created and have not yet filled. Anything that is still
+    within a small multiple of the empty cube has not seen the data. The margin
+    is enormous in practice (40 KB skeleton against 40-67 MB loaded), so the
+    factor only has to be clear of sampling noise.
+
+    Raising is deliberate. A gate that cannot measure its own fixture has nothing
+    to say about parity, and saying nothing loudly beats reporting a comparison
+    between two numbers that were never measurements.
+    """
+    if skeleton is None:
+        # No pre-fill reading to compare against (metric unavailable on the empty
+        # cube). Fall back to requiring any plausibly-loaded value rather than
+        # skipping the gate entirely.
+        floor = _GAUGE_LOADED_FLOOR_BYTES
+    else:
+        floor = skeleton * _GAUGE_SKELETON_FACTOR
+
+    for attempt in range(_SETTLE_ATTEMPTS):
+        current = read_gauge_bytes(tm1)
+        if current is not None and current > floor:
+            print(f"    gauge settled: {current:.0f} bytes "
+                  f"(skeleton {skeleton if skeleton is None else f'{skeleton:.0f}'})")
+            return current
+        if attempt < _SETTLE_ATTEMPTS - 1:
+            time.sleep(_SETTLE_WAIT_SECONDS)
+
+    raise RuntimeError(
+        f"cube_memory_used for '{CUBE}' never rose above {floor:.0f} bytes in "
+        f"{_SETTLE_ATTEMPTS * _SETTLE_WAIT_SECONDS}s after the fill (last read "
+        f"{read_gauge_bytes(tm1)}). The gauge is still reporting the unloaded "
+        f"cube, so every mode would measure the same value and the winners would "
+        f"be tie-breaks. Refusing to run the gate on numbers that are not "
+        f"measurements.")
+
+
 def setup_instance(tm1: TM1Service):
+    """Build the fixture from scratch and do not return until it is measurable.
+
+    A fixture this run did not build is never adopted. `update_or_create` would
+    happily reuse one left behind by a crashed run, and that is worse than it
+    sounds: a crash *after* a mode run leaves the cube in a REORDERED storage
+    order, and the next run reads that back as its "original order" — the exact
+    value the gate compares across versions. Dropping first costs one delete and
+    removes the whole class of problem. The cube name is owned by this script.
+    """
+    if tm1.cubes.exists(CUBE):
+        print(f"    found a leftover '{CUBE}' — dropping it rather than adopting it")
+        teardown_instance(tm1)
     _build_dimensions(tm1)
     _build_cube(tm1)
+    # The empty cube's own reading, taken before any data exists: the reference
+    # the post-fill gate below measures against.
+    skeleton = read_gauge_bytes(tm1)
     # Server-side fill (avoids the client->server request-memory cap on v12).
     tm1.processes.execute_ti_code(_ti_fill_prolog())
+    _wait_until_the_gauge_leaves_the_skeleton(tm1, skeleton)
 
 
 def teardown_instance(tm1: TM1Service):
@@ -227,21 +318,64 @@ def _latest_csv(instance: str) -> str:
 
 
 def _parse_result_csv(path: str) -> dict:
-    """Extract winner order + RAM bytes and the original-order baseline bytes."""
+    """Extract the winner, the original-order baseline, and every order's RAM.
+
+    ``ram_by_order`` is what lets the comparison tell a disagreement from a tie:
+    given v12's winning order, it answers what v11 measured for that same order.
+    Keys are the order joined by ``|`` so the snapshot stays JSON-serialisable.
+    """
     n_dims = len(_dimension_names())
     best = None
     original_ram = None
+    ram_by_order = {}
     with open(path, newline="") as f:
         # Result CSVs begin with '# ...' comment lines and a blank line before
         # the real 'ID,Mode,...' header; drop those so DictReader sees the header.
         data_lines = [ln for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
     for row in csv.DictReader(data_lines):
         order = [row[f"Dimension{i}"] for i in range(1, n_dims + 1)]
+        ram = float(row["RAM"])
+        ram_by_order["|".join(order)] = ram
         if (row.get("Mode") or "").upper().startswith("ORIGINAL"):
-            original_ram = float(row["RAM"])
+            original_ram = ram
         if (row.get("Is Best") or "").strip().lower() == "true":
-            best = {"order": order, "ram_bytes": float(row["RAM"])}
-    return {"best": best, "original_ram_bytes": original_ram}
+            best = {"order": order, "ram_bytes": ram}
+    return {"best": best, "original_ram_bytes": original_ram,
+            "ram_by_order": ram_by_order}
+
+
+class _FatalCatcher(logging.Handler):
+    """Keep the ERROR records a mode run logged, so the report can quote them.
+
+    core.main catches its own fatal exceptions, logs them and returns False, so
+    the reason a mode failed is otherwise only in the log file. Without it the
+    report cannot tell the reader whether a mode failed because the two versions
+    disagree or because the socket died, and someone re-diagnoses it from scratch.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+# Substrings that mark a failure as transport rather than anything OptimusPy
+# decided. A hint for the label only — the captured text is printed either way
+# and is what should be believed.
+_TRANSPORT_MARKERS = (
+    "ConnectionReset", "Connection reset", "ConnectionError", "Connection aborted",
+    "RemoteDisconnected", "Max retries exceeded", "Timeout", "timed out",
+    "BrokenPipe", "SSLError",
+)
+
+
+def classify_failure(error_text):
+    """'transport' for a dead connection, 'run' for anything else."""
+    if not error_text:
+        return "run"
+    return "transport" if any(m in error_text for m in _TRANSPORT_MARKERS) else "run"
 
 
 def run_modes(instance: str, config_ini: str, password: str) -> dict:
@@ -249,11 +383,23 @@ def run_modes(instance: str, config_ini: str, password: str) -> dict:
     for mode_label, overrides in MODE_CONFIGS.items():
         tm1_mode = "set" if mode_label == "set" else "optimize"
         cube_config = _cube_config(instance, overrides)
-        ok = core.main(tm1_mode, cube_config, config_ini, password=password, no_resume=True)
+        catcher = _FatalCatcher()
+        logging.getLogger().addHandler(catcher)
+        error = None
+        try:
+            ok = core.main(tm1_mode, cube_config, config_ini, password=password,
+                           no_resume=True)
+        except Exception as exc:                            # noqa: BLE001
+            ok, error = False, f"{type(exc).__name__}: {exc}"
+        finally:
+            logging.getLogger().removeHandler(catcher)
+        if not ok and error is None and catcher.messages:
+            error = catcher.messages[-1]
         csv_path = _latest_csv(instance)
         parsed = _parse_result_csv(csv_path) if (ok and csv_path) else None
-        results[mode_label] = {"ok": bool(ok), "result": parsed}
-        print(f"    [{instance}] {mode_label}: ok={bool(ok)}")
+        results[mode_label] = {"ok": bool(ok), "result": parsed, "error": error}
+        suffix = "" if ok else f" [{classify_failure(error)}] {error or 'no error captured'}"
+        print(f"    [{instance}] {mode_label}: ok={bool(ok)}{suffix}")
     return results
 
 
@@ -301,6 +447,42 @@ def _settled_original_ram(snapshot: dict):
     return None
 
 
+def _winners_tie(r11, b11, r12, b12):
+    """True when each version measures the other version's winner as equivalent.
+
+    Cross-server byte comparison would be the wrong test — the two servers report
+    slightly different absolute sizes for identical data, and the %-chains are
+    independent. What actually matters is whether either version had a reason to
+    prefer its own winner. So v11's numbers are asked about v12's order and vice
+    versa, and only if BOTH say "no measurable difference" is this a tie.
+
+    An order the other version never evaluated is not a tie: the modes prune
+    candidates as they go, and an unexplored order is an unknown, not an equal.
+    Returns (tie, detail_lines) — the lines are printed either way, because the
+    numbers are what make a FAIL actionable.
+    """
+    detail = []
+    tie = True
+    for label, own, own_best, other_best in (
+            ("v11", r11, b11, b12), ("v12", r12, b12, b11)):
+        by_order = own.get("ram_by_order") or {}
+        other_ram = by_order.get("|".join(other_best["order"]))
+        if other_ram is None:
+            detail.append(f"{label} never evaluated the other version's winner "
+                          f"— no tie can be claimed")
+            tie = False
+            continue
+        mine = own_best["ram_bytes"]
+        delta = abs(mine - other_ram)
+        within = delta <= max(mine, other_ram) * _TIE_TOLERANCE
+        tie &= within
+        detail.append(
+            f"{label} measured its own winner at {mine:.0f} B and the other's at "
+            f"{other_ram:.0f} B (delta {delta:.0f}, "
+            f"{'tied' if within else 'a real preference'})")
+    return tie, detail
+
+
 def compare(v11: dict, v12: dict) -> bool:
     print("\n=== PARITY REPORT ===")
     ok = True
@@ -327,13 +509,27 @@ def compare(v11: dict, v12: dict) -> bool:
           f"v12: {v12['baseline']['raw_value']} {v12['baseline']['raw_unit']}")
 
     print(f"\nMode winner parity:")
+    print("  (PASS = same winner or a measured tie; FAIL = the versions disagree; "
+          "ERROR = a run did not complete, so nothing was compared)")
     for mode in MODE_CONFIGS:
         m11 = v11["modes"].get(mode) or {}
         m12 = v12["modes"].get(mode) or {}
         r11, r12 = m11.get("result"), m12.get("result")
         if not m11.get("ok") or not m12.get("ok") or not r11 or not r12:
-            print(f"  {mode}: FAIL (mode errored or produced no result on one version)")
+            # Not a disagreement: no comparison happened at all. Say which side
+            # died and quote the reason, so a dropped socket is not re-diagnosed
+            # as a version difference by the next person to read this.
             ok = False
+            print(f"  {mode}: ERROR (the run did not complete — nothing was compared)")
+            for label, m in (("v11", m11), ("v12", m12)):
+                if m.get("ok") and m.get("result"):
+                    continue
+                err = m.get("error")
+                kind = classify_failure(err)
+                print(f"    {label}: [{kind}] {err or 'failed with no error captured'}")
+                if kind == "transport":
+                    print(f"    {label}: a dropped connection is a harness/network "
+                          f"failure, not a parity result — re-run this mode.")
             continue
         b11, b12 = r11.get("best"), r12.get("best")
         if b11 is None and b12 is None:
@@ -346,12 +542,29 @@ def compare(v11: dict, v12: dict) -> bool:
             print(f"  {mode}: FAIL (a winner emerged on one version only)")
             ok = False
             continue
-        same = b11["order"] == b12["order"]
-        ok &= same
-        print(f"  {mode}: {'PASS' if same else 'FAIL'}")
-        if not same:
-            print(f"    v11 -> {b11['order']}")
-            print(f"    v12 -> {b12['order']}")
+        if b11["order"] == b12["order"]:
+            print(f"  {mode}: PASS")
+            continue
+
+        # Different winners. Before calling that a disagreement, ask whether the
+        # data even supports a preference: adjacent dimensions of similar
+        # cardinality can measure identically, and demanding a total order where
+        # the measurements only support an equivalence class makes this gate flake
+        # on a perfectly good run. Each version is asked about the other's winner
+        # using its OWN numbers.
+        tie, detail = _winners_tie(r11, b11, r12, b12)
+        if tie:
+            print(f"  {mode}: PASS (tie — the two winners measure the same on both "
+                  f"versions, within {_TIE_TOLERANCE:.1%})")
+            for line in detail:
+                print(f"    {line}")
+            continue
+        ok = False
+        print(f"  {mode}: FAIL")
+        print(f"    v11 -> {b11['order']}")
+        print(f"    v12 -> {b12['order']}")
+        for line in detail:
+            print(f"    {line}")
 
     print(f"\nOVERALL: {'PASS' if ok else 'FAIL'}")
     return ok

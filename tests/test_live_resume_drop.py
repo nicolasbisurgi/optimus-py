@@ -37,10 +37,24 @@ def parity_fixture(tm1):
     """The 300k-cell skewed cube the scenario runs against.
 
     Left in place if it was already there — building it takes minutes, and an
-    instance kept warm between runs should stay that way.
+    instance kept warm between runs should stay that way. But an existing cube is
+    only reused once it has been checked: a run that died partway leaves a cube
+    that carries the right name and nothing else guaranteed, and adopting one
+    silently is how a broken fixture survives across runs looking healthy. If it
+    is not the fixture this module expects, say so rather than testing against it.
     """
     parity = sample_module("validate_v11_v12_parity")
     built_here = not tm1.cubes.exists(parity.CUBE)
+    if not built_here:
+        found = set(tm1.cubes.get_dimension_names(parity.CUBE))
+        expected = set(parity._dimension_names())
+        if found != expected:
+            pytest.fail(
+                f"cube '{parity.CUBE}' already exists on this instance but is not "
+                f"the parity fixture: missing {sorted(expected - found)}, extra "
+                f"{sorted(found - expected)}. Drop it and re-run; this test will "
+                f"not adopt a cube it cannot recognise.",
+                pytrace=False)
     try:
         # setup_instance creates the cube, then eight dimensions, then loads
         # 300k cells. A failure anywhere in there must still be torn down —
