@@ -12,9 +12,10 @@ both servers, then:
   2. Proves the ``cube_memory_used`` Unit->bytes conversion is correct (v11 reports
      ``B``, v12 reports ``KB``) by checking that the *original-order* RAM OptimusPy
      measured during those runs converts to near-equal bytes across versions — a
-     wrong conversion would differ by ~1024x. It uses the run-time reading (settled
-     cube), not the pre-run baseline sample, whose v12 gauge can lag right after the
-     bulk load. The pre-run baseline is still captured for information only.
+     wrong conversion would differ by ~1024x. It uses the run-time reading (taken
+     on a cube the readiness probe has shown to be measurable), not the pre-run
+     baseline sample, which reads a skeleton figure on a cube nothing has touched
+     since its load. The pre-run baseline is still captured for information only.
   3. Writes a JSON snapshot (``--snapshot``). Run this script on the *pre-change*
      commit against the v11 instance, keep the snapshot, then run it again on the
      post-change commit and diff the two snapshots to confirm v11 behaviour is
@@ -55,26 +56,25 @@ from TM1py import TM1Service, Dimension, Hierarchy, Element, Cube  # noqa: E402
 from optimuspy import core  # noqa: E402
 from optimuspy.core import get_tm1_config  # noqa: E402
 from optimuspy.metrics import (  # noqa: E402
-    detect_is_v12, unit_to_bytes, CUBE_MEMORY_METRIC,
+    detect_is_v12, ram_source_ready, unit_to_bytes, CUBE_MEMORY_METRIC,
 )
 
 # Pre-run baseline sampling (informational only — the conversion proof uses the
-# settled original-order RAM from the mode runs; see _settled_original_ram). Right
-# after a bulk load cube_memory_used is still catching up, so poll until the value
-# plateaus. NOTE: v12's gauge can stay at the near-empty skeleton for longer than
-# this whole window (its refresh interval), so the pre-run v12 sample may under-
-# report; that is why it is not the proof source.
+# settled original-order RAM from the mode runs; see _settled_original_ram). A
+# cold cube reports a small skeleton figure here, which is normal and harmless:
+# the readiness probe below, not this sample, is what decides whether the run may
+# proceed.
 _SETTLE_ATTEMPTS = 24
 _SETTLE_WAIT_SECONDS = 10
 _SETTLE_TOLERANCE = 0.01
 
-# Post-fill gate (see _wait_until_the_gauge_leaves_the_skeleton). A loaded fixture
-# reads 40-67 MB against a ~40 KB empty-cube skeleton, so 4x is far clear of
-# sampling noise while still being unambiguous about "this is not the empty cube".
-_GAUGE_SKELETON_FACTOR = 4
-# Only used when the empty cube reports no metric at all and there is no skeleton
-# reading to scale from.
-_GAUGE_LOADED_FLOOR_BYTES = 1_000_000
+# Readiness probe (see _probe_until_the_ram_channel_answers). One rearrangement
+# known to cost memory on both engines, measured side by side on 11.8.02200.2 and
+# 12.5.9/12.6.4: moving the largest dimension to position 6 returns about -12.5%
+# on each. Requiring a non-zero answer to exactly that change tests the channel
+# the gate depends on, rather than a proxy for it.
+_PROBE_ATTEMPTS = 8
+_PROBE_WAIT_SECONDS = 15
 
 # Two orders count as tied when their measured RAM differs by less than this
 # fraction. The gate compares each version's winner against the OTHER version's
@@ -176,51 +176,73 @@ def read_gauge_bytes(tm1: TM1Service):
     return None if row is None else unit_to_bytes(row.get("Value"), row.get("Unit"))
 
 
-def _wait_until_the_gauge_leaves_the_skeleton(tm1: TM1Service, skeleton):
-    """Block until cube_memory_used reflects the fill, or fail the setup.
+def _probe_order(canonical):
+    """The rearrangement the readiness probe applies: largest dimension to position 6.
 
-    This is the gate that stops the whole comparison running against a frozen
-    gauge. On v12 cube_memory_used is sampled, and after this fixture's 300k-cell
-    load it has been observed reporting the empty-cube skeleton (~40 KB) for
-    around five minutes — long enough to cover several complete mode runs. A run
-    in that state measures every permutation at the same value, picks a winner by
-    tie-break, and prints a RAM column that looks entirely ordinary. The two
-    versions then disagree for a reason that has nothing to do with OptimusPy.
-
-    The threshold is measured, not guessed: `skeleton` is this same gauge read on
-    the cube we just created and have not yet filled. Anything that is still
-    within a small multiple of the empty cube has not seen the data. The margin
-    is enormous in practice (40 KB skeleton against 40-67 MB loaded), so the
-    factor only has to be clear of sampling noise.
-
-    Raising is deliberate. A gate that cannot measure its own fixture has nothing
-    to say about parity, and saying nothing loudly beats reporting a comparison
-    between two numbers that were never measurements.
+    Chosen because it is *known* to cost memory on both engines rather than
+    assumed to. Most rearrangements of this cube are free on v11 and v12 alike —
+    an identity, an adjacent swap of the two smallest dimensions, even a swap of
+    the two largest all return 0% on both — and a 0 from one of those is the
+    truth, not a missing answer. A probe built on one of them would pass on a
+    dead channel and fail on a live one.
     """
-    if skeleton is None:
-        # No pre-fill reading to compare against (metric unavailable on the empty
-        # cube). Fall back to requiring any plausibly-loaded value rather than
-        # skipping the gate entirely.
-        floor = _GAUGE_LOADED_FLOOR_BYTES
-    else:
-        floor = skeleton * _GAUGE_SKELETON_FACTOR
+    return [*canonical[1:7], canonical[0], canonical[7]]
 
-    for attempt in range(_SETTLE_ATTEMPTS):
-        current = read_gauge_bytes(tm1)
-        if current is not None and current > floor:
-            print(f"    gauge settled: {current:.0f} bytes "
-                  f"(skeleton {skeleton if skeleton is None else f'{skeleton:.0f}'})")
-            return current
-        if attempt < _SETTLE_ATTEMPTS - 1:
-            time.sleep(_SETTLE_WAIT_SECONDS)
+
+def _probe_until_the_ram_channel_answers(tm1: TM1Service):
+    """Block until a reorder returns a non-zero percentage, or fail the setup.
+
+    This is the gate that stops the whole comparison running before the fixture
+    is measurable. It does not watch the gauge and does not wait a fixed time:
+    it exercises the exact channel every mode run depends on — the percentage
+    ``update_storage_dimension_order`` returns — and demands a real answer from
+    it.
+
+    Why that is the right test. A cube whose data is not yet resident costs the
+    same in every order, so it truthfully returns 0% for every rearrangement and
+    a truthfully tiny figure from the memory gauge. Both readings are honest;
+    the run built on them is not. A gate that waited for the gauge to grow would
+    be testing a symptom, and a gate that waited a fixed number of seconds would
+    be testing nothing at all.
+
+    Raising is deliberate. A gate that cannot get an answer out of its own
+    fixture has nothing to say about parity, and saying nothing loudly beats
+    reporting a comparison between two numbers that were never measurements.
+
+    The cube is returned to the order it came in on, whatever the outcome.
+    """
+    is_v12 = detect_is_v12(tm1)
+    canonical = list(tm1.cubes.get_storage_dimension_order(cube_name=CUBE))
+    probe = _probe_order(canonical)
+    last = None
+
+    with ram_source_ready(tm1, is_v12):
+        for attempt in range(_PROBE_ATTEMPTS):
+            try:
+                last = tm1.cubes.update_storage_dimension_order(CUBE, probe)
+            finally:
+                # Restore on every path: a probe that leaves the fixture
+                # rearranged has corrupted the very "original order" the gate
+                # compares across versions.
+                tm1.cubes.update_storage_dimension_order(CUBE, canonical)
+            if last:
+                print(f"    RAM channel answering: probe reorder returned {last:.4f}% "
+                      f"(gauge {read_gauge_bytes(tm1)})")
+                return last
+            if attempt < _PROBE_ATTEMPTS - 1:
+                print(f"    probe returned 0% — cube not measurable yet, retrying in "
+                      f"{_PROBE_WAIT_SECONDS}s")
+                time.sleep(_PROBE_WAIT_SECONDS)
 
     raise RuntimeError(
-        f"cube_memory_used for '{CUBE}' never rose above {floor:.0f} bytes in "
-        f"{_SETTLE_ATTEMPTS * _SETTLE_WAIT_SECONDS}s after the fill (last read "
-        f"{read_gauge_bytes(tm1)}). The gauge is still reporting the unloaded "
-        f"cube, so every mode would measure the same value and the winners would "
-        f"be tie-breaks. Refusing to run the gate on numbers that are not "
-        f"measurements.")
+        f"the RAM channel for '{CUBE}' never answered: moving the largest "
+        f"dimension to position 6 returned {last} on every one of "
+        f"{_PROBE_ATTEMPTS} attempts over "
+        f"{_PROBE_ATTEMPTS * _PROBE_WAIT_SECONDS}s. That rearrangement costs "
+        f"about 12.5% on both v11 and v12 when the cube is measurable, so a zero "
+        f"means the fill has not become resident. Every mode would measure the "
+        f"same value and every winner would be a tie-break. Refusing to run the "
+        f"gate on numbers that are not measurements.")
 
 
 def setup_instance(tm1: TM1Service):
@@ -238,12 +260,9 @@ def setup_instance(tm1: TM1Service):
         teardown_instance(tm1)
     _build_dimensions(tm1)
     _build_cube(tm1)
-    # The empty cube's own reading, taken before any data exists: the reference
-    # the post-fill gate below measures against.
-    skeleton = read_gauge_bytes(tm1)
     # Server-side fill (avoids the client->server request-memory cap on v12).
     tm1.processes.execute_ti_code(_ti_fill_prolog())
-    _wait_until_the_gauge_leaves_the_skeleton(tm1, skeleton)
+    _probe_until_the_ram_channel_answers(tm1)
 
 
 def teardown_instance(tm1: TM1Service):
@@ -259,13 +278,14 @@ def teardown_instance(tm1: TM1Service):
 def read_baseline(tm1: TM1Service, is_v12: bool) -> dict:
     """Read cube_memory_used once it plateaus; report raw value + Unit + bytes.
 
-    This is a best-effort *pre-run informational* sample only. It is NOT the
-    conversion-proof source: right after the fresh bulk load, v12's
-    cube_memory_used gauge can sit at the near-empty cube skeleton for longer than
-    any reasonable pre-run settle window (its sampled-gauge refresh interval), so
-    this can report the skeleton size on v12. The conversion proof instead uses the
-    original-order RAM OptimusPy measures *during* the mode runs, which is read on a
-    settled cube on both versions (see _settled_original_ram / compare).
+    This is a best-effort *pre-run informational* sample only, and a small value
+    here is not a defect: a cube that has not yet been touched since its load
+    reports a skeleton figure, and a passing six-mode parity run has been
+    recorded with a 40,960 B sample sitting beside a correct 67,145,728 B
+    run-time measurement. The conversion proof uses the latter — the
+    original-order RAM OptimusPy measures *during* the mode runs, on a cube the
+    readiness probe has already shown to be measurable (see
+    _settled_original_ram / compare).
     """
     best = None
     raw = None
@@ -436,8 +456,8 @@ def _settled_original_ram(snapshot: dict):
     parsed back as ``original_ram_bytes``. That read happens well after the load, on
     a settled cube, via the product's own version-aware read path — so it is the
     reliable cross-version conversion-proof value, unlike the pre-run read_baseline
-    whose v12 sample can still be the pre-climb skeleton. Returns the first
-    available mode's value (they all read the identical original order).
+    whose sample is taken on a cube nothing has touched since its load. Returns
+    the first available mode's value (they all read the identical original order).
     """
     for mode in MODE_CONFIGS:
         res = (snapshot.get("modes", {}).get(mode) or {}).get("result") or {}
@@ -488,9 +508,9 @@ def compare(v11: dict, v12: dict) -> bool:
     ok = True
 
     # Conversion proof uses the settled original-order RAM the product measured
-    # during the runs (both versions), NOT the pre-run baseline sample (v12's gauge
-    # can lag behind the fresh load). If the Unit->bytes conversion were wrong, v11
-    # (B) and v12 (KB) would differ by ~1024x rather than by identical-data noise.
+    # during the runs (both versions), NOT the pre-run baseline sample, which is a
+    # cold read. If the Unit->bytes conversion were wrong, v11 (B) and v12 (KB)
+    # would differ by ~1024x rather than by identical-data noise.
     o11, o12 = _settled_original_ram(v11), _settled_original_ram(v12)
     print(f"\nRAM (Unit->bytes conversion proof — original-order RAM as measured during the runs):")
     if o11 and o12:
@@ -504,7 +524,7 @@ def compare(v11: dict, v12: dict) -> bool:
     else:
         ok = False
         print("  FAIL (no original-order RAM captured on one version)")
-    print(f"  [pre-run baseline sample, informational — v12 may lag right after load] "
+    print(f"  [pre-run cold sample, informational — a small figure here is normal] "
           f"v11: {v11['baseline']['raw_value']} {v11['baseline']['raw_unit']}; "
           f"v12: {v12['baseline']['raw_value']} {v12['baseline']['raw_unit']}")
 

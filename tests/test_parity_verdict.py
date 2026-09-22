@@ -91,3 +91,33 @@ def test_anything_else_is_classified_as_a_run_failure():
     assert parity.classify_failure(
         "Fatal error: view 'Default' in cube 'C' is too small") == "run"
     assert parity.classify_failure(None) == "run"
+
+
+# --- the readiness probe's choice of rearrangement --------------------------
+#
+# Which rearrangement the probe applies is the whole of its value, so it is
+# pinned here. Most rearrangements of this fixture are free on BOTH engines —
+# measured 22 Sep on 11.8.02200.2 and 12.6.4, an identity, an adjacent swap of
+# the two smallest dimensions and a swap of the two largest all returned 0% on
+# each. A probe built on any of those would pass against a cube that is not
+# resident. Moving the largest dimension to position 6 returned about -12.5% on
+# both, which is why it is the one that gets asked.
+
+def test_the_probe_moves_the_largest_dimension_to_position_six():
+    d = [f"D{i}" for i in range(1, 8)] + ["Measure"]
+    assert parity._probe_order(d) == ["D2", "D3", "D4", "D5", "D6", "D7", "D1", "Measure"]
+
+
+def test_the_probe_is_not_one_of_the_free_rearrangements():
+    d = [f"D{i}" for i in range(1, 8)] + ["Measure"]
+    probe = parity._probe_order(d)
+    assert probe != d                                        # not the identity
+    assert probe != [*d[:5], d[6], d[5], d[7]]               # not the D6<->D7 swap
+    assert probe != [d[1], d[0], *d[2:]]                     # not the D1<->D2 swap
+
+
+def test_the_probe_leaves_the_measure_dimension_last():
+    # The fixture's measure dimension is last-position legal and must stay put;
+    # a probe that moved it would be testing a different cube.
+    d = [f"D{i}" for i in range(1, 8)] + ["Measure"]
+    assert parity._probe_order(d)[-1] == "Measure"
