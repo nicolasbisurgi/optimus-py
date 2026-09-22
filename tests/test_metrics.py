@@ -14,7 +14,8 @@ Offline, no fake.
 import pytest
 
 from optimuspy.metrics import (
-    CUBE_MEMORY_METRIC, cube_memory_used_bytes, memory_by_cube_bytes, unit_to_bytes)
+    CUBE_MEMORY_METRIC, bytes_per_cell_is_implausible, cube_memory_used_bytes,
+    memory_by_cube_bytes, populated_cell_count, unit_to_bytes)
 
 
 def _row(cube, value, unit, metric=CUBE_MEMORY_METRIC):
@@ -79,3 +80,48 @@ def test_the_pivot_still_refuses_an_unknown_unit():
     # convert would quietly drop a cube from the plan instead of reporting why.
     with pytest.raises(RuntimeError):
         memory_by_cube_bytes([_row("Sales", 2, "GB")])
+
+
+# --- the populated-cell cross-check ----------------------------------------
+#
+# The check exists because September's parity run measured 40,960 bytes against
+# 300,000 populated cells and optimised against it. Those two numbers arrive in
+# the same by_cube() payload, so nothing extra has to be asked of the server.
+
+def _cells(numeric=None, string=None):
+    rows = []
+    if numeric is not None:
+        rows.append(_row("Sales", numeric, "#", metric="cube_num_populated_numeric_cells"))
+    if string is not None:
+        rows.append(_row("Sales", string, "#", metric="cube_num_populated_string_cells"))
+    return rows
+
+
+def test_populated_cells_sums_numeric_and_string():
+    assert populated_cell_count(_cells(numeric=300_000, string=1_000)) == 301_000
+
+
+def test_populated_cells_is_none_when_the_server_reports_neither():
+    assert populated_cell_count([_row("Sales", 5, "B")]) is None
+
+
+def test_the_september_reading_is_refused():
+    # 40,960 B / 300,000 cells = 0.137 bytes/cell.
+    reason = bytes_per_cell_is_implausible(40_960.0, _cells(numeric=300_000))
+    assert reason is not None
+    assert "0.1365" in reason and "300,000" in reason
+
+
+def test_a_real_reading_on_the_same_cube_passes():
+    # The same fixture measured while resident: ~224 bytes/cell.
+    assert bytes_per_cell_is_implausible(67_145_728.0, _cells(numeric=300_000)) is None
+
+
+def test_an_empty_cube_is_not_accused():
+    # No populated cells is a legitimate reason to cost almost nothing.
+    assert bytes_per_cell_is_implausible(40_960.0, _cells(numeric=0)) is None
+
+
+def test_no_cell_counts_means_no_verdict():
+    # A server that does not report the counts gets silence, not a guess.
+    assert bytes_per_cell_is_implausible(40_960.0, [_row("Sales", 40, "KB")]) is None
