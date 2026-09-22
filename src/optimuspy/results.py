@@ -232,6 +232,14 @@ def ram_signal_is_dead(results: List[PermutationResult]) -> bool:
     picked by whatever broke the tie, and without this nothing in the output
     says the search had no RAM signal to go on.
 
+    What it means is "this cube was not measurable on this run" — nothing
+    stronger. It is not evidence of a broken server or a broken version: a cube
+    whose data is not resident costs the same in every order, so 0% everywhere
+    is the server answering honestly. Note also that a 0% for one rearrangement
+    is ordinary and expected; not every rearrangement costs memory, and adjacent
+    swaps of small dimensions are routinely free. Only ALL of them coming back
+    zero says the run learned nothing.
+
     Both conditions are tested, not just the percentages, because a resume
     re-anchors the chain with an absolute read: such a run can show 0% on every
     order and still carry two distinct RAM values. That is a different

@@ -660,17 +660,18 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
             # Say it before the winner is announced, so the two are read together.
             if ram_signal_is_dead(unique_results):
                 logging.warning(
-                    f"NO RAM SIGNAL for cube '{cube_name}': every order the server was "
-                    f"asked to apply came back 0.00%, so all {len(unique_results)} rows "
-                    f"report the same RAM and any RAM-ranked choice below was a "
-                    f"tie-break, not a measurement. Treat the RAM column and the "
-                    f"recommended order as unsupported.")
-                if is_v12:
-                    logging.warning(
-                        f"The usual cause on v12 is cube_memory_used still reporting the "
-                        f"pre-load skeleton for cube '{cube_name}'. Let the cube settle "
-                        f"after a large load and re-run.")
-
+                    f"THIS CUBE WAS NOT MEASURABLE: every order OptimusPy asked the "
+                    f"server to apply to cube '{cube_name}' came back 0.00%, so all "
+                    f"{len(unique_results)} rows report the same RAM and any RAM-ranked "
+                    f"choice below was a tie-break, not a measurement. Treat the RAM "
+                    f"column and the recommended order as unsupported.")
+                logging.warning(
+                    f"This is a statement about cube '{cube_name}' on this run, not "
+                    f"about the server or its version. The usual cause is that the "
+                    f"cube's data was not resident when benchmarking started — an "
+                    f"unmaterialised cube costs the same in every order, so 0.00% is "
+                    f"the truthful answer to a question worth nothing. Let a large "
+                    f"load settle and re-run.")
             if not best_permutation:
                 tm1.cubes.update_storage_dimension_order(cube_name, initial_dimension_order)
                 logging.info(
