@@ -30,8 +30,8 @@ from optimuspy.results import ExecutionContext, OptimusResult
 #
 # It is the only fake outside the optimize_db suite that models a cube. A grep for
 # "Fake" finds the rest, all predating the offline/live split and none of them a
-# precedent either: test_optimize_db_executor.py carries six, fenced off by
-# docs/superpowers/plans/2026-09-18-land-optimize-db.md for that work to retire;
+# precedent either: test_optimize_db_executor.py carries six, fenced off
+# there and scheduled to retire with that module's own live coverage;
 # test_inflight_status.py and test_ram_reanchor.py each carry a two-method stub of
 # update_storage_dimension_order, because both test behaviour BELOW the
 # _measure_permutation seam — a reorder that raises, and the one absolute re-anchor

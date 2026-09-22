@@ -55,8 +55,8 @@ def test_first_and_last_are_accepted_as_slots():
 
 
 def test_an_unresolvable_rule_seats_nothing():
-    # It must not silently reserve a slot: that is how Task 5a's hole admitted
-    # zero orders and reported success.
+    # It must not silently reserve a slot: a reserved slot nobody asked for
+    # can narrow the search to zero orders and still report success.
     f = frame([{"dimension": "Nope", "position": 0},
                {"dimension": "Year", "position": "middle"}])
     assert f.pinned_positions == {}

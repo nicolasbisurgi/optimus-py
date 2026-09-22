@@ -150,6 +150,12 @@ nav:
       - Multi-View / Multi-Process: advanced/multi-view-multi-process.md
       - Dimension Position Rules: advanced/dimension-position-rules.md
       - Exporting / Importing Orders: advanced/exporting-importing-orders.md
+  - Requirements:
+      - Order Frame: requirements/order-frame.md
+      - Optimize DB: requirements/optimize-db.md
+      - Checkpoint & Resume: requirements/checkpoint-resume.md
+      - Dimension Position Rules: requirements/dimension-position-rules.md
+      - TM1 v12 Support: requirements/tm1-v12-support.md
   - Examples:
       - RAM-Only Optimization: examples/ram-only-optimization.md
       - View Benchmarking: examples/view-benchmarking.md

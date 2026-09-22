@@ -324,6 +324,20 @@ optimuspy set configs/Sales_set.json
 
 ---
 
+## What Was Built — Requirements Documentation
+
+The sections above are the tour. The requirement documents are the specification: what each feature does, the constraints it honours, and what it guarantees.
+
+| Document | Covers |
+|---|---|
+| [The Order Frame](requirements/order-frame.md) | The storage order as the frame of reference, the three tiers of admissibility, the locked slot, dimension pinning and pre-application |
+| [Optimize DB](requirements/optimize-db.md) | The instance-wide heuristic pass: planning, the wall-clock budget, derived savings, regressions, chores and the three artifacts |
+| [Checkpoint and Resume](requirements/checkpoint-resume.md) | The v3 schema, dimension-set validation, the RAM anchor and in-flight reorder recovery |
+| [Dimension Position Rules](requirements/dimension-position-rules.md) | 0-based positions, fail-fast validation, and how rules are pre-applied to the search |
+| [TM1 v12 Support](requirements/tm1-v12-support.md) | MetricService, the Unit conversion, and what differs between v11 and v12 — and what does not |
+
+---
+
 ## What's Next?
 
 We'd love your feedback. What features would make OptimusPy more useful for your TM1 optimization workflow?

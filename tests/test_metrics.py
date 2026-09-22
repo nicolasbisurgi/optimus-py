@@ -84,9 +84,11 @@ def test_the_pivot_still_refuses_an_unknown_unit():
 
 # --- the populated-cell cross-check ----------------------------------------
 #
-# The check exists because September's parity run measured 40,960 bytes against
-# 300,000 populated cells and optimised against it. Those two numbers arrive in
-# the same by_cube() payload, so nothing extra has to be asked of the server.
+# A cube that is not resident reports a skeleton for cube_memory_used while the
+# populated-cell counts in the very same by_cube() payload report the truth.
+# 40,960 bytes against 300,000 populated cells is a density no storage engine
+# can produce, and both numbers are already in hand, so nothing extra has to be
+# asked of the server.
 
 def _cells(numeric=None, string=None):
     rows = []
@@ -105,7 +107,7 @@ def test_populated_cells_is_none_when_the_server_reports_neither():
     assert populated_cell_count([_row("Sales", 5, "B")]) is None
 
 
-def test_the_september_reading_is_refused():
+def test_an_impossible_density_is_refused():
     # 40,960 B / 300,000 cells = 0.137 bytes/cell.
     reason = bytes_per_cell_is_implausible(40_960.0, _cells(numeric=300_000))
     assert reason is not None
@@ -113,7 +115,7 @@ def test_the_september_reading_is_refused():
 
 
 def test_a_real_reading_on_the_same_cube_passes():
-    # The same fixture measured while resident: ~224 bytes/cell.
+    # The same cube measured while resident: ~224 bytes/cell.
     assert bytes_per_cell_is_implausible(67_145_728.0, _cells(numeric=300_000)) is None
 
 

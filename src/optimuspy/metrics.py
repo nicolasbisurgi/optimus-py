@@ -155,9 +155,9 @@ def bytes_per_cell_is_implausible(ram_bytes, rows):
     A cube that is not resident reports a skeleton for ``cube_memory_used``
     while ``cube_num_populated_*_cells`` in the very same payload reports the
     truth. That pairing is the tell, and it is arithmetic rather than a guess:
-    in September a parity run measured 40,960 B against 300,000 populated cells,
-    or 0.137 bytes per cell, which no storage engine can produce — a real
-    reading on that cube is about 224 B/cell. Optimising against such a baseline
+    40,960 B against 300,000 populated cells is 0.137 bytes per cell, which no
+    storage engine can produce — a real reading on a cube that size is about
+    224 B/cell. Optimising against such a baseline
     is worse than not running, because every order costs the same and the search
     returns a confident tie-break.
 

@@ -79,9 +79,9 @@ def test_the_read_returns_the_row_converted_to_bytes(tm1, a_cube, is_v12):
 
 
 def test_a_settled_cube_reads_the_same_size_twice(tm1, a_cube, is_v12):
-    # The v12 plateau loop exists because the gauge lags a data change. On a
-    # cube nobody is loading, the second read must confirm the first — otherwise
-    # every %-chain in a run is anchored to a moving number.
+    # The v12 plateau loop exists because a cube still materialising reads small
+    # and rising. On a cube nobody is loading, the second read must confirm the
+    # first — otherwise every %-chain in a run is anchored to a moving number.
     first = read_cube_memory_bytes(tm1, a_cube, is_v12)
     second = read_cube_memory_bytes(tm1, a_cube, is_v12)
     assert second == pytest.approx(first, rel=0.01), (first, second)

@@ -71,8 +71,7 @@ class OrderFrame:
 
         A rule that names neither is skipped here and reported by
         `validate_position_rules`. It must not silently constrain the search:
-        pinning an unreadable rule would reserve a slot nobody asked for, and
-        Task 5a's hole was exactly that kind of silent narrowing.
+        pinning an unreadable rule would reserve a slot nobody asked for.
 
         Conflicts — two rules on one slot, or one dimension named twice — keep
         the first rule so the frame stays deterministic while validation reports
@@ -266,9 +265,9 @@ class OrderFrame:
         the first, so a rewritten config is checked in one pass.
 
         This is where each case `required_index` defers becomes the error the
-        documentation promises. Until Task 5b they were all silently ignored,
-        which meant a typo'd rule constrained nothing and the run reported
-        success over a search nobody asked for.
+        documentation promises. Silently ignoring them would mean a typo'd rule
+        constrains nothing while the run reports success over a search nobody
+        asked for.
         """
         count = len(self.storage_order)
         problems = []
