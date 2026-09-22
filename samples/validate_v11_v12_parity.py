@@ -83,6 +83,11 @@ _PROBE_WAIT_SECONDS = 15
 # best-result banding (1%/2.5%/5% of the measured range in determine_best_result).
 _TIE_TOLERANCE = 0.005
 
+# The same tolerance expressed for the percentage channel, which is what a
+# disputed pair is settled with when neither mode's search happened to evaluate
+# the other's winner. Percentages come back as e.g. -12.4931 for -12.4931%.
+_TIE_TOLERANCE_PCT = _TIE_TOLERANCE * 100
+
 # --- Fixture definition -----------------------------------------------------
 
 CUBE = "OptimusPy_Parity_Test"
@@ -467,6 +472,84 @@ def _settled_original_ram(snapshot: dict):
     return None
 
 
+def measure_order_gap(tm1: TM1Service, order_a, order_b):
+    """Percentage change this server reports for going from order_a to order_b.
+
+    Deliberately the percentage channel and not the memory gauge. On v11 the
+    gauge is sampled and sits one step behind its own reported percentages, so
+    reading it immediately after a reorder returns the PREVIOUS order's figure —
+    which on a two-order comparison is exactly the wrong number. Both versions
+    report the percentage correctly and immediately.
+
+    A near-zero answer means the two orders cost the same on this server. The
+    cube is left on order_b; callers restore.
+    """
+    tm1.cubes.update_storage_dimension_order(CUBE, list(order_a))
+    return tm1.cubes.update_storage_dimension_order(CUBE, list(order_b))
+
+
+def resolve_disputed_winners(snapshot: dict, config_ini: str, v11_name: str, v12_name: str):
+    """Measure, on both servers, every pair of winners the runs left unresolved.
+
+    A greedy search is a hill-climb: it only ever evaluates orders on its own
+    path. When the two versions finish on different orders, neither one has
+    usually measured the other's, so ``ram_by_order`` cannot say whether the
+    disagreement is a real preference or two orders that cost the same. Without
+    this the gate has to call every such pair a failure, which is how it flakes
+    on a good run — v11 and v12 finishing on Dim6/Dim7 swapped is the live case,
+    and that swap measures 0% on both engines.
+
+    So the missing measurement is taken rather than assumed, while the fixture is
+    still up: apply one winner, then the other, and record what the server says
+    the change cost. This asserts the thing that is actually true instead of
+    relaxing the thing that was asserted.
+
+    Each cube is put back to the order it was found in.
+    """
+    disputed = []
+    for mode in MODE_CONFIGS:
+        r11 = (snapshot["v11"]["modes"].get(mode) or {}).get("result") or {}
+        r12 = (snapshot["v12"]["modes"].get(mode) or {}).get("result") or {}
+        b11, b12 = r11.get("best"), r12.get("best")
+        if not b11 or not b12 or b11["order"] == b12["order"]:
+            continue
+        disputed.append((mode, b11["order"], b12["order"]))
+    if not disputed:
+        return
+
+    print(f"\n  resolving {len(disputed)} disputed winner(s) by measurement:")
+    for label, instance in (("v11", v11_name), ("v12", v12_name)):
+        args = dict(get_tm1_config(config_ini)[instance])
+        args["session_context"] = "optimuspy-parity-tie"
+        with TM1Service(**args) as tm1:
+            is_v12 = detect_is_v12(tm1)
+            original = list(tm1.cubes.get_storage_dimension_order(cube_name=CUBE))
+            try:
+                with ram_source_ready(tm1, is_v12):
+                    for mode, o11, o12 in disputed:
+                        pct = measure_order_gap(tm1, o11, o12)
+                        snapshot[label]["modes"][mode]["cross_gap_pct"] = pct
+                        print(f"    [{instance}] {mode}: v11's winner -> v12's "
+                              f"winner costs {pct}%")
+            finally:
+                tm1.cubes.update_storage_dimension_order(CUBE, original)
+
+
+def _measured_gap_tie(m11, m12):
+    """(tie, detail) from the directly measured gaps, or None when they are absent."""
+    g11, g12 = m11.get("cross_gap_pct"), m12.get("cross_gap_pct")
+    if g11 is None or g12 is None:
+        return None
+    detail, tie = [], True
+    for label, gap in (("v11", g11), ("v12", g12)):
+        within = abs(gap) <= _TIE_TOLERANCE_PCT
+        tie &= within
+        detail.append(
+            f"{label} measured the step from one winner to the other at {gap}% "
+            f"({'no cost — tied' if within else 'a real preference'})")
+    return tie, detail
+
+
 def _winners_tie(r11, b11, r12, b12):
     """True when each version measures the other version's winner as equivalent.
 
@@ -572,7 +655,10 @@ def compare(v11: dict, v12: dict) -> bool:
         # the measurements only support an equivalence class makes this gate flake
         # on a perfectly good run. Each version is asked about the other's winner
         # using its OWN numbers.
-        tie, detail = _winners_tie(r11, b11, r12, b12)
+        # A gap measured directly on both servers beats inference from orders
+        # the searches happened to visit, so it is used when it is available.
+        measured = _measured_gap_tie(m11, m12)
+        tie, detail = measured if measured else _winners_tie(r11, b11, r12, b12)
         if tie:
             print(f"  {mode}: PASS (tie — the two winners measure the same on both "
                   f"versions, within {_TIE_TOLERANCE:.1%})")

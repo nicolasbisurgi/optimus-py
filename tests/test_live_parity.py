@@ -46,10 +46,16 @@ def snapshots(instances, tm1_config_path):
     parity = sample_module("validate_v11_v12_parity")
     v11_name, v12_name = instances
     try:
-        yield parity, {
+        snapshot = {
             "v11": parity.process_instance(v11_name, tm1_config_path, None, do_setup=True),
             "v12": parity.process_instance(v12_name, tm1_config_path, None, do_setup=True),
         }
+        # Any mode whose two winners differ gets the missing measurement taken
+        # now, while both fixtures are still up. A search only evaluates orders
+        # on its own path, so without this a disagreement cannot be told apart
+        # from two orders that cost the same — and the gate fails on the latter.
+        parity.resolve_disputed_winners(snapshot, tm1_config_path, v11_name, v12_name)
+        yield parity, snapshot
     finally:
         # One instance failing to clean up must not skip the other, and a
         # leftover fixture cube is itself a reportable failure — not a warning

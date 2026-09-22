@@ -121,3 +121,34 @@ def test_the_probe_leaves_the_measure_dimension_last():
     # a probe that moved it would be testing a different cube.
     d = [f"D{i}" for i in range(1, 8)] + ["Measure"]
     assert parity._probe_order(d)[-1] == "Measure"
+
+
+# --- the directly measured tie-break ----------------------------------------
+#
+# When neither version's search evaluated the other's winner, _winners_tie has
+# nothing to compare and must refuse to claim a tie. The gap is then measured on
+# both servers instead (resolve_disputed_winners), and that measurement decides.
+
+def test_a_measured_zero_gap_on_both_servers_is_a_tie():
+    tie, detail = parity._measured_gap_tie({"cross_gap_pct": 0}, {"cross_gap_pct": 0})
+    assert tie is True
+    assert all("tied" in line for line in detail)
+
+
+def test_a_real_measured_cost_on_either_server_is_not_a_tie():
+    assert parity._measured_gap_tie(
+        {"cross_gap_pct": 0}, {"cross_gap_pct": -12.4931})[0] is False
+    assert parity._measured_gap_tie(
+        {"cross_gap_pct": -12.5004}, {"cross_gap_pct": 0})[0] is False
+
+
+def test_a_gap_just_inside_tolerance_is_a_tie():
+    inside = parity._TIE_TOLERANCE_PCT * 0.9
+    assert parity._measured_gap_tie(
+        {"cross_gap_pct": inside}, {"cross_gap_pct": -inside})[0] is True
+
+
+def test_no_measurement_means_no_verdict_from_this_route():
+    # Absent on either side hands the decision back to _winners_tie.
+    assert parity._measured_gap_tie({}, {"cross_gap_pct": 0}) is None
+    assert parity._measured_gap_tie({"cross_gap_pct": 0}, {}) is None
