@@ -1,48 +1,56 @@
-.idea/
-dist/
-.venv/
-build/
+# Local working files — never committed, never shared.
+#
+# Anything worth keeping but not worth releasing goes here: scratch scripts,
+# run artifacts, debugging notebooks, superseded plans, client configs. One
+# entry, true in advance. This directory exists so that no future scratch file
+# needs its own line in this file — the pattern that preceded it accumulated a
+# dozen individually-named paths, each added only after the file had already
+# appeared, and a commit once swept in sixteen files in the gap before the next
+# line was written.
+.local/
+
+# Python
 __pycache__/
 *.pyc
-results/
-*.log
-config/config.ini
 *.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.idea/
 .claude/
 .serena/
-configs/
-test.py
+.impeccable/
+.superpowers/
 CLAUDE.md
 
-# v11/v12 parity validation snapshots (run artifacts; logs already covered by *.log)
-parity.json
-v11_before.json
-v11_after.json
-parity_snapshot_v2.json
+# Editor and OS droppings. .DS_Store is caught by most developers' global
+# ignore file; it is repeated here so the repo does not depend on that.
+.DS_Store
+*.swp
+*.swo
 
-# mkdocs build output
+# Credentials. The only file here that is dangerous rather than merely untidy.
+config/config.ini
+
+# Runtime output directories the product itself creates, relative to the working
+# directory: results/ (core.py RESULT_PATH), configs/ (ui.py saved configs) and
+# logs/ (core.py log path). They are working state, not scratch, so they stay
+# where the code expects them rather than moving under .local/.
+results/
+configs/
+logs/
+*.log
+
+# mkdocs build output. Note this is NOT ./site — site/homepage is the tracked
+# React landing page, and mkdocs is configured with site_dir: mkdocs_site to
+# keep the two apart.
 mkdocs_site/
 
-# Internal planning (not deployed to public docs)
+# Internal planning, not part of the published documentation set.
 docs/superpowers/
 docs/plans/
 docs/*.docx
-
-# Local scratch (never intended for the repo)
-PLAN.md
-pending.txt
-logs/
-
-
-# Local scratch, continued. Anchored with a leading slash on purpose: `images/`
-# and `requirements/` are ordinary directory names a tool could create anywhere,
-# and `images/` at the repo root is itself tracked (logo.png, logo.svg,
-# scatter_plot.png). Only these exact stray paths are ignored.
-#
-# /images/icon.png duplicates the packaged src/optimuspy/images/icon.png.
-# /requirements/ is the landing-page spec and mockups, not a Python
-# requirements directory.
-/images/icon.png
-/requirements/
-/samples/generate_full_drafts.py
-/samples/optimize_copy.json
