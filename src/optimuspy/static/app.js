@@ -633,6 +633,47 @@ const OptimusPy = (function () {
   }
 
   // ==================================================================
+  // Terminal — the log view of a job stream
+  // ==================================================================
+  // Lines are coloured by the record's level, appended in one batch per animation
+  // frame, capped at TERMINAL_MAX_LINES (oldest dropped first), and scrolled to
+  // the bottom only while the reader is already there.
+  const TERMINAL_MAX_LINES = 2000;
+  const LOG_LEVEL_CLASSES = { ERROR: "log-error", CRITICAL: "log-error", WARNING: "log-warning" };
+
+  function createTerminal() {
+    const view = el("div", { className: "terminal" });
+    let pending = [];
+    let scheduled = false;
+
+    function line(log) {
+      const text = log && log.message != null ? String(log.message) : String(log);
+      const cls = LOG_LEVEL_CLASSES[log && log.level];
+      return el("div", { className: "terminal-line" }, cls ? el("span", { className: cls }, text) : text);
+    }
+
+    function flush() {
+      scheduled = false;
+      const pinned = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+      const batch = document.createDocumentFragment();
+      pending.forEach(log => batch.appendChild(line(log)));
+      pending = [];
+      view.appendChild(batch);
+      while (view.childElementCount > TERMINAL_MAX_LINES) view.firstElementChild.remove();
+      if (pinned) view.scrollTop = view.scrollHeight;
+    }
+
+    return {
+      el: view,
+      append(log) {
+        pending.push(log);
+        if (pending.length > TERMINAL_MAX_LINES) pending.splice(0, pending.length - TERMINAL_MAX_LINES);
+        if (!scheduled) { scheduled = true; requestAnimationFrame(flush); }
+      },
+    };
+  }
+
+  // ==================================================================
   // DimensionConfigurator factory
   // ==================================================================
   function createDimensionConfigurator({ dimensions, metadata, mode, onChange }) {
@@ -1157,63 +1198,51 @@ const OptimusPy = (function () {
   // StreamManager — holds EventSource connections across navigations
   // ==================================================================
   const StreamManager = {
-    _streams: {},   // jobId → { es: EventSource, logs: [], status, subscribers: [cb] }
+    _streams: {},   // jobId → { es, logs, lastId, status, subscribers }
+
+    _entry(jobId) {
+      if (!this._streams[jobId]) {
+        this._streams[jobId] = { es: null, logs: [], lastId: 0, status: "unknown", subscribers: [] };
+      }
+      return this._streams[jobId];
+    },
 
     connect(jobId) {
-      if (this._streams[jobId]?.es) return;
-      const entry = this._streams[jobId] || { es: null, logs: [], status: "running", subscribers: [] };
-      this._streams[jobId] = entry;
-
-      const es = new EventSource(`/api/job/${jobId}/stream`);
+      const entry = this._entry(jobId);
+      if (entry.es) return;
+      if (entry.status === "unknown") entry.status = "running";
+      // Continue after the last event already received, so reopening a stream
+      // neither repeats nor loses lines. EventSource resumes the same way when it
+      // reconnects by itself.
+      const es = new EventSource(`/api/job/${jobId}/stream?after=${entry.lastId}`);
       entry.es = es;
-
-      es.addEventListener("log", e => {
-        const data = JSON.parse(e.data);
+      const notify = (event, data) => entry.subscribers.forEach(cb => cb(event, data));
+      const on = (event, handle) => es.addEventListener(event, e => {
+        entry.lastId = Number(e.lastEventId) || entry.lastId;
+        handle(JSON.parse(e.data));
+      });
+      on("log", data => {
         entry.logs.push(data);
-        entry.subscribers.forEach(cb => cb("log", data));
+        if (entry.logs.length > TERMINAL_MAX_LINES) entry.logs.shift();
+        notify("log", data);
       });
-      es.addEventListener("progress", e => {
-        const data = JSON.parse(e.data);
-        entry.subscribers.forEach(cb => cb("progress", data));
-      });
-      es.addEventListener("complete", e => {
-        const data = JSON.parse(e.data);
-        entry.status = "completed";
-        entry.subscribers.forEach(cb => cb("complete", data));
+      on("progress", data => notify("progress", data));
+      ["complete", "error_event", "cancelled"].forEach(event => on(event, data => {
+        entry.status = event === "complete" ? (data.status || "completed")
+          : event === "cancelled" ? "cancelled" : "failed";
         es.close();
         entry.es = null;
-      });
-      es.addEventListener("error_event", e => {
-        const data = JSON.parse(e.data);
-        entry.status = "failed";
-        entry.subscribers.forEach(cb => cb("error_event", data));
-        es.close();
-        entry.es = null;
-      });
-      es.addEventListener("cancelled", e => {
-        const data = JSON.parse(e.data);
-        entry.status = "cancelled";
-        entry.subscribers.forEach(cb => cb("cancelled", data));
-        es.close();
-        entry.es = null;
-      });
+        notify(event, data);
+      }));
       es.onerror = () => {
-        // SSE auto-reconnect or close
-        if (es.readyState === EventSource.CLOSED) {
-          entry.es = null;
-        }
+        if (es.readyState === EventSource.CLOSED) entry.es = null;
       };
     },
 
     subscribe(jobId, callback) {
-      if (!this._streams[jobId]) {
-        this._streams[jobId] = { es: null, logs: [], status: "unknown", subscribers: [] };
-      }
-      this._streams[jobId].subscribers.push(callback);
-      return () => {
-        const s = this._streams[jobId];
-        if (s) s.subscribers = s.subscribers.filter(cb => cb !== callback);
-      };
+      const entry = this._entry(jobId);
+      entry.subscribers.push(callback);
+      return () => { entry.subscribers = entry.subscribers.filter(cb => cb !== callback); };
     },
 
     getLogs(jobId) {
@@ -2790,19 +2819,18 @@ const OptimusPy = (function () {
       container.appendChild(statusBar);
 
       // Terminal
-      const terminal = el("div", { className: "terminal", id: "optimize-terminal" });
-      container.appendChild(terminal);
+      const terminal = createTerminal();
+      container.appendChild(terminal.el);
 
       // Determine job for this cube
       this._findActiveJob().then(job => {
         this._jobId = job ? job.job_id : null;
         if (!job) {
-          terminal.appendChild(el("div", { className: "terminal-line text-tertiary" }, "No active optimization. Configure and start from the Configure tab."));
+          terminal.el.appendChild(el("div", { className: "terminal-line text-tertiary" }, "No active optimization. Configure and start from the Configure tab."));
           return;
         }
 
-        const existingLogs = StreamManager.getLogs(job.job_id);
-        existingLogs.forEach(log => appendLog(terminal, log));
+        StreamManager.getLogs(job.job_id).forEach(log => terminal.append(log));
 
         // This tab's stream manager only knows the jobs this tab has streamed. For
         // any other job — one started in another tab, or before a reload — the
@@ -2825,11 +2853,17 @@ const OptimusPy = (function () {
           statusDot.classList.add("failed");
           statusText.textContent = "Cancelled";
         }
+        // A finished job this tab never streamed: connect once to replay its log.
+        // The server sends the log, then the final event, then closes the stream.
+        // The status above is already drawn, so the final event is not announced.
+        const replaying = streamed === "unknown" && sseStatus !== "running";
+        if (replaying) StreamManager.connect(job.job_id);
 
         this._unsubStream = StreamManager.subscribe(job.job_id, (event, data) => {
           if (event === "log") {
-            appendLog(terminal, data);
-            terminal.scrollTop = terminal.scrollHeight;
+            terminal.append(data);
+          } else if (replaying) {
+            return;
           } else if (event === "complete") {
             statusDot.className = "status-dot completed";
             statusText.textContent = "Completed";
@@ -2854,24 +2888,6 @@ const OptimusPy = (function () {
           }
         });
       });
-
-      function appendLog(term, logData) {
-        const line = el("div", { className: "terminal-line" });
-        const msg = logData.message || logData;
-        const text = typeof msg === "string" ? msg : JSON.stringify(msg);
-
-        // Color log levels
-        if (text.includes("ERROR") || text.includes("error")) {
-          line.innerHTML = `<span class="log-error">${escapeHtml(text)}</span>`;
-        } else if (text.includes("WARNING") || text.includes("warning")) {
-          line.innerHTML = `<span class="log-warning">${escapeHtml(text)}</span>`;
-        } else if (text.includes("SUCCESS") || text.includes("Best result") || text.includes("completed")) {
-          line.innerHTML = `<span class="log-success">${escapeHtml(text)}</span>`;
-        } else {
-          line.textContent = text;
-        }
-        term.appendChild(line);
-      }
     },
 
     // Stop following the job on the Optimize tab. Called before the tab is drawn
@@ -3989,29 +4005,13 @@ const OptimusPy = (function () {
       };
       refreshQueue();
 
-      const terminal = el("div", { className: "terminal" });
-      card.appendChild(terminal);
+      const terminal = createTerminal();
+      card.appendChild(terminal.el);
       const summary = el("div", { className: "mt-4" });
       card.appendChild(summary);
       container.appendChild(card);
 
-      const appendLog = (logData) => {
-        const line = el("div", { className: "terminal-line" });
-        const message = logData && logData.message != null ? logData.message : logData;
-        const text = typeof message === "string" ? message : JSON.stringify(message);
-        const level = logData && logData.level;
-        if (level === "ERROR" || level === "CRITICAL") {
-          line.innerHTML = `<span class="log-error">${escapeHtml(text)}</span>`;
-        } else if (level === "WARNING") {
-          line.innerHTML = `<span class="log-warning">${escapeHtml(text)}</span>`;
-        } else {
-          line.textContent = text;
-        }
-        terminal.appendChild(line);
-      };
-
-      StreamManager.getLogs(this._jobId).forEach(appendLog);
-      terminal.scrollTop = terminal.scrollHeight;
+      StreamManager.getLogs(this._jobId).forEach(log => terminal.append(log));
 
       const sseStatus = StreamManager.getStatus(this._jobId);
       if (sseStatus === "running" || sseStatus === "unknown") {
@@ -4031,8 +4031,7 @@ const OptimusPy = (function () {
 
       this._unsubStream = StreamManager.subscribe(this._jobId, (event, data) => {
         if (event === "log") {
-          appendLog(data);
-          terminal.scrollTop = terminal.scrollHeight;
+          terminal.append(data);
           return;
         }
         stopBtn.style.display = "none";
