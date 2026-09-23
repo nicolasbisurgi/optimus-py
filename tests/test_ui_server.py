@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
+from TM1py.Exceptions import TM1pyRestException
 
 from optimuspy import ui
 from optimuspy.executors import OptimizationCancelled
@@ -593,3 +594,46 @@ def test_the_run_state_of_an_unknown_or_malformed_id(ui_server, plan_id, expecte
     base, _ = ui_server(PLAN_INI)
     status, _, _ = request("GET", f"{base}/api/optimize-db/run/{plan_id}")
     assert status == expected
+
+
+REFUSED = TM1pyRestException("", 401, "Unauthorized", {
+    "Set-Cookie": "TM1SessionId=s3ss10n; Path=/api/; HttpOnly", "WWW-Authenticate": 'Basic realm="TM1"'})
+
+
+def _tm1_raises(monkeypatch, error):
+    def connect(instance, password=None):
+        raise error
+    monkeypatch.setattr(ui, "_create_tm1_connection", connect)
+
+
+def test_a_refused_login_shows_the_status_not_the_headers(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    _tm1_raises(monkeypatch, REFUSED)
+    status, _, text = request("POST", f"{base}/api/connect", body={"instance": "prod"})
+    assert status == 502
+    assert json.loads(text)["error"] == "Connection failed: TM1 returned 401 Unauthorized"
+    assert "TM1SessionId" not in text
+
+
+def test_tm1s_own_message_is_what_the_page_shows(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    _tm1_raises(monkeypatch, TM1pyRestException(
+        '{"error": {"code": "278", "message": "Cube \'Nope\' not found"}}', 404, "Not Found",
+        {"Set-Cookie": "TM1SessionId=s3ss10n"}))
+    status, _, text = request("POST", f"{base}/api/views", body={"instance": "prod", "cube": "Nope"})
+    assert status == 500
+    assert json.loads(text)["error"] == "TM1 returned 404 Not Found: Cube 'Nope' not found"
+
+
+def test_a_job_that_hits_a_tm1_error_reports_it_without_the_headers():
+    jobs = ui.JobManager()
+
+    def work(job):
+        raise TM1pyRestException("boom", 500, "Internal Server Error", {"Set-Cookie": "TM1SessionId=s3ss10n"})
+
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", work))
+    wait_done(job)
+    events, _ = job.events_after(0, timeout=0)
+    assert events[-1]["event"] == "error_event"
+    assert events[-1]["data"]["error"] == "TM1 returned 500 Internal Server Error: boom"
+    assert "TM1SessionId" not in json.dumps(events)

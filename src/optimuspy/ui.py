@@ -22,6 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from TM1py.Exceptions import TM1pyRestException
+
 from optimuspy.cli import tm1_connector
 from optimuspy.core import (
     get_tm1_config, validate_cube_config,
@@ -58,6 +60,19 @@ def _browser_json(data) -> bytes:
             return [clean(item) for item in value]
         return value
     return json.dumps(clean(data)).encode("utf-8")
+
+
+def _error_text(e: Exception) -> str:
+    """An exception as the page shows it. A TM1 REST error's own text carries the
+    response headers, the session cookie among them; the page gets the status and
+    TM1's message only. Any other exception is shown as it is."""
+    if not isinstance(e, TM1pyRestException):
+        return str(e)
+    message = e.response or ""
+    with suppress(ValueError, KeyError, TypeError):
+        message = json.loads(message)["error"]["message"]
+    status = f"TM1 returned {e.status_code} {e.reason}".rstrip()
+    return f"{status}: {message}" if message else status
 
 
 # Global state
@@ -207,8 +222,9 @@ class JobManager:
             logging.info("Job cancelled by user")
             final = ("cancelled", "cancelled", {"message": "Cancelled by user"}, None)
         except Exception as e:
-            logging.error(f"Job failed: {e}")
-            final = ("failed", "error_event", {"error": str(e)}, str(e))
+            text = _error_text(e)
+            logging.error(f"Job failed: {text}")
+            final = ("failed", "error_event", {"error": text}, text)
         finally:
             root.removeHandler(handler)
         job.finish(*final)
@@ -307,7 +323,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         try:
             job = job_manager.get(job_manager.start(mode, label, instance, work))
         except RuntimeError as e:
-            return self._send_json(409, {"error": str(e)})
+            return self._send_json(409, {"error": _error_text(e)})
         self._send_json(200, {"job_id": job.job_id, "status": "running", "started_at": job.started_at})
 
     def _read_body(self) -> dict:
@@ -357,7 +373,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_body()
         except Exception as e:
-            return self._send_json(400, {"error": f"Invalid JSON: {e}"})
+            return self._send_json(400, {"error": f"Invalid JSON: {_error_text(e)}"})
 
         if path == "/api/connect":
             return self._handle_connect(body)
@@ -498,7 +514,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 "read_only": _config_read_only,
             })
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_get_instance(self, instance_name: str):
         try:
@@ -509,7 +525,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                       if key.lower() not in SECRET_KEYS}
             self._send_json(200, {"instance": instance_name, "params": params})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_update_instance(self, instance_name: str, body: dict):
         if _config_read_only:
@@ -526,7 +542,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_create_instance(self, body: dict):
         if _config_read_only:
@@ -549,7 +565,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_delete_instance(self, instance_name: str):
         if _config_read_only:
@@ -564,7 +580,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_delete_instance_field(self, instance_name: str, field_key: str):
         if _config_read_only:
@@ -581,7 +597,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 config.write(f)
             self._send_json(200, {"success": True})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_connect(self, body: dict):
         instance = body.get("instance")
@@ -598,7 +614,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                     "cube_count": len(cubes),
                 })
         except Exception as e:
-            self._send_json(502, {"error": f"Connection failed: {e}"})
+            self._send_json(502, {"error": f"Connection failed: {_error_text(e)}"})
 
     def _handle_scan(self, body: dict):
         instance = body.get("instance")
@@ -613,7 +629,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized, is_v12=is_v12)
                 self._send_json(200, data)
         except Exception as e:
-            self._send_json(500, {"error": f"Scan failed: {e}"})
+            self._send_json(500, {"error": f"Scan failed: {_error_text(e)}"})
 
     def _handle_views(self, body: dict):
         instance = body.get("instance")
@@ -626,7 +642,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 private_views, public_views = tm1.views.get_all_names(cube_name=cube)
                 self._send_json(200, {"views": sorted(public_views)})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_processes(self, body: dict):
         instance = body.get("instance")
@@ -640,7 +656,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 processes = [p for p in processes if not p.startswith("}")]
                 self._send_json(200, {"processes": sorted(processes)})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_process_parameters(self, body: dict):
         instance = body.get("instance")
@@ -658,7 +674,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 ]
                 self._send_json(200, {"process_name": process_name, "parameters": params})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_cube_intelligence(self, body: dict):
         instance = body.get("instance")
@@ -679,7 +695,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 "suggested_order": suggested,
             })
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_save_config(self, body: dict):
         config_data = body.get("config")
@@ -710,7 +726,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             config_path.unlink()
             self._send_json(200, {"success": True})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_list_saved_cubes(self):
         configs = []
@@ -741,7 +757,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             validate_cube_config(config, mode)
             self._send_json(200, {"valid": True})
         except ValueError as e:
-            self._send_json(200, {"valid": False, "error": str(e)})
+            self._send_json(200, {"valid": False, "error": _error_text(e)})
 
     def _handle_start_job(self, body: dict):
         mode = body.get("mode", "optimize")
@@ -809,7 +825,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 data = _scan_to_data_light(tm1, instance, ram_percent, include_optimized=True, is_v12=is_v12)
                 self._send_json(200, data)
         except Exception as e:
-            self._send_json(500, {"error": f"Scan failed: {e}"})
+            self._send_json(500, {"error": f"Scan failed: {_error_text(e)}"})
 
     def _handle_transfer_target_orders(self, body: dict):
         instance = body.get("instance")
@@ -831,7 +847,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                     orders[cube_name] = list(storage_order)
                 self._send_json(200, {"orders": orders, "missing": missing})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_transfer_apply(self, body: dict):
         instance = body.get("instance")
@@ -898,7 +914,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 files.append(str(file_path))
             self._send_json(200, {"files": files})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     # Instruction fields the Optimize DB form can set; everything else in the
     # request body (instance, password) is connection detail, not an option.
@@ -923,13 +939,13 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         try:
             validate_db_config(config)
         except ValueError as e:
-            return self._send_json(400, {"error": str(e)})
+            return self._send_json(400, {"error": _error_text(e)})
         try:
             connect = tm1_connector(_config_ini_path, instance, password)
             plan = optimize_db(connect, config=config, dry_run=True)
             self._send_json(200, plan)
         except Exception as e:
-            self._send_json(500, {"error": f"Plan failed: {e}"})
+            self._send_json(500, {"error": f"Plan failed: {_error_text(e)}"})
 
     def _handle_optimize_db_run(self, body: dict):
         instance = body.get("instance")
@@ -974,7 +990,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         try:
             self._send_json(200, {"runs": list_runs()})
         except Exception as e:
-            self._send_json(500, {"error": str(e)})
+            self._send_json(500, {"error": _error_text(e)})
 
     def _handle_optimize_db_run_state(self, plan_id: str):
         if Path(plan_id).name != plan_id:
@@ -996,7 +1012,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             restored = restore_chores_for_plan(connect, plan_id)
             self._send_json(200, {"restored": restored})
         except Exception as e:
-            self._send_json(500, {"error": f"Chore restore failed: {e}"})
+            self._send_json(500, {"error": f"Chore restore failed: {_error_text(e)}"})
 
     def _handle_list_results(self):
         results = []
