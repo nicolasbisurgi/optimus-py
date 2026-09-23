@@ -90,6 +90,15 @@ def _create_tm1_connection(instance_name: str, password: str = None):
     return tm1_connector(_config_ini_path, instance_name, password)()
 
 
+def _write_config(config) -> None:
+    """Save config.ini, creating its folder: the executable ships without one, so
+    the first instance added from Settings is what creates config/config.ini."""
+    path = Path(_config_ini_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        config.write(f)
+
+
 # ---------------------------------------------------------------------------
 # Job Manager — tracks background optimize/set jobs with SSE progress
 # ---------------------------------------------------------------------------
@@ -538,8 +547,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[instance_name][key] = str(value)
-            with open(_config_ini_path, "w", encoding="utf-8") as f:
-                config.write(f)
+            _write_config(config)
             self._send_json(200, {"success": True})
         except Exception as e:
             self._send_json(500, {"error": _error_text(e)})
@@ -561,8 +569,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             params = body.get("params", {})
             for key, value in params.items():
                 config[name][key] = str(value)
-            with open(_config_ini_path, "w", encoding="utf-8") as f:
-                config.write(f)
+            _write_config(config)
             self._send_json(200, {"success": True})
         except Exception as e:
             self._send_json(500, {"error": _error_text(e)})
@@ -576,8 +583,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if instance_name not in config:
                 return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
             config.remove_section(instance_name)
-            with open(_config_ini_path, "w", encoding="utf-8") as f:
-                config.write(f)
+            _write_config(config)
             self._send_json(200, {"success": True})
         except Exception as e:
             self._send_json(500, {"error": _error_text(e)})
@@ -593,8 +599,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             if field_key not in config[instance_name]:
                 return self._send_json(404, {"error": f"Field '{field_key}' not found"})
             config.remove_option(instance_name, field_key)
-            with open(_config_ini_path, "w", encoding="utf-8") as f:
-                config.write(f)
+            _write_config(config)
             self._send_json(200, {"success": True})
         except Exception as e:
             self._send_json(500, {"error": _error_text(e)})
