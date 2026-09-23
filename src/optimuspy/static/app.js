@@ -1317,7 +1317,7 @@ const OptimusPy = (function () {
         const running = jobs.find(j => j.status === "running");
         if (running) {
           container.innerHTML = "";
-          const cubeName = running.cube_name || running.cube_config?.cube || "Unknown";
+          const cubeName = running.label;
           const bar = el("div", { className: "activity-bar" },
             el("div", { className: "activity-pulse" }),
             el("div", { className: "activity-label" },
@@ -2819,10 +2819,10 @@ const OptimusPy = (function () {
         const data = await Api.getJobs();
         const jobs = data.jobs || [];
         // Find running job for this cube
-        const running = jobs.find(j => j.status === "running" && (j.cube_name || j.cube_config?.cube) === this._cubeName);
+        const running = jobs.find(j => j.status === "running" && j.label === this._cubeName);
         if (running) return running.job_id;
         // Find most recent job for this cube
-        const recent = jobs.filter(j => (j.cube_name || j.cube_config?.cube) === this._cubeName);
+        const recent = jobs.filter(j => j.label === this._cubeName);
         if (recent.length > 0) return recent[0].job_id;
       } catch { /* */ }
       return null;
@@ -3004,7 +3004,7 @@ const OptimusPy = (function () {
               return el("span", { className: `badge ${cls}` }, r.status);
             }},
             { key: "cube", label: "Cube", render: r => {
-              const cube = r.cube_name || r.cube_config?.cube || "Unknown";
+              const cube = r.label;
               return el("a", { href: `#/cube/${encodeURIComponent(cube)}?tab=optimize`, className: "font-medium" }, cube);
             }},
             { key: "instance", label: "Instance", value: r => r.instance || "—" },
@@ -3015,7 +3015,7 @@ const OptimusPy = (function () {
           data: jobs,
           filterable: false,
           onRowClick: (row) => {
-            const cube = row.cube_name || row.cube_config?.cube;
+            const cube = row.label;
             if (cube) Router.navigate(`#/cube/${encodeURIComponent(cube)}?tab=optimize`);
           },
         });

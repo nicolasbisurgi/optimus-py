@@ -10,16 +10,16 @@ Usage:
 import argparse
 import json
 import logging
-import queue
 import re
 import sys
 import threading
 import time
 import uuid
 import webbrowser
+from contextlib import suppress
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 from TM1py import TM1Service
 
@@ -70,358 +70,176 @@ def _create_tm1_connection(instance_name: str, password: str = None):
 # ---------------------------------------------------------------------------
 
 class JobLogHandler(logging.Handler):
-    """Routes log records to a job's progress queue for SSE streaming."""
+    """Copies log records into a job's event log, so the page's terminal shows them."""
 
-    def __init__(self, progress_queue: queue.Queue):
-        super().__init__()
-        self.progress_queue = progress_queue
+    def __init__(self, job):
+        super().__init__(level=logging.INFO)
+        self.job = job
 
     def emit(self, record):
         try:
-            self.progress_queue.put({
-                "event": "log",
-                "data": {
-                    "timestamp": time.strftime("%H:%M:%S"),
-                    "level": record.levelname,
-                    "message": record.getMessage()
-                }
+            self.job.emit("log", {
+                "timestamp": time.strftime("%H:%M:%S"),
+                "level": record.levelname,
+                "message": record.getMessage(),
             })
         except Exception:
             pass
 
 
+class Job:
+    """One background job and its event log.
+
+    Events are appended and never consumed. Every reader walks the log from its
+    own cursor, so two tabs, or a stream that reconnects, each see all of it, and
+    a reader that arrives after the job ended replays it. The last event is always
+    `complete`, `cancelled` or `error_event`, and its data carries the final status.
+    """
+
+    def __init__(self, job_id: str, mode: str, label: str, instance: str):
+        self.job_id = job_id
+        self.mode = mode
+        self.label = label
+        self.instance = instance
+        self.status = "running"
+        self.error = None
+        self.result_files = []
+        self.started_at = time.time()
+        self.completed_at = None
+        self.cancel_event = threading.Event()
+        # Work whose in-flight server calls Stop may abort publishes its TM1
+        # service here as {"tm1": service}. See JobManager.cancel.
+        self.tm1_holder = {}
+        self._events = []
+        self._cond = threading.Condition()
+
+    def emit(self, event: str, data: dict):
+        with self._cond:
+            self._events.append({"event": event, "data": data})
+            self._cond.notify_all()
+
+    def finish(self, status: str, event: str, data: dict, error: str = None):
+        with self._cond:
+            self.status = status
+            self.error = error
+            self.completed_at = time.time()
+            self._events.append({"event": event, "data": dict(data, status=status)})
+            self._cond.notify_all()
+
+    def events_after(self, cursor: int, timeout: float):
+        """The events past `cursor`, waiting up to `timeout` seconds for the first.
+
+        Returns `(events, done)`. When `done` is true the list ends with the final
+        event and nothing will follow it.
+        """
+        with self._cond:
+            if cursor >= len(self._events) and self.completed_at is None:
+                self._cond.wait(timeout)
+            return self._events[cursor:], self.completed_at is not None
+
+    def summary(self) -> dict:
+        with self._cond:
+            return {
+                "job_id": self.job_id,
+                "status": self.status,
+                "mode": self.mode,
+                "label": self.label,
+                "instance": self.instance,
+                "started_at": self.started_at,
+                "completed_at": self.completed_at,
+                "result_files": self.result_files,
+                "error": self.error,
+            }
+
+
 class JobManager:
-    """Manages background optimize/set jobs."""
+    """Runs one background job at a time and keeps every job for the session."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._jobs = {}
-        self._active_job_id = None
+        self._active = None
 
-    def start_job(self, mode: str, cube_config: dict, password: str = None) -> str:
+    def start(self, mode: str, label: str, instance: str, work) -> str:
+        """Run `work(job)` on a background thread and return the job id.
+
+        `work` returns `(status, data)` — status "completed", "failed" or
+        "cancelled" — and `data` becomes the final `complete` event. Raising
+        OptimizationCancelled ends the job as cancelled; any other exception ends
+        it as failed. Log records at INFO and above are copied into the job's log
+        while it runs. Raises RuntimeError while another job is running.
+        """
         with self._lock:
-            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
+            if self._active is not None and self._active.status == "running":
                 raise RuntimeError("A job is already running")
+            job = Job(uuid.uuid4().hex[:8], mode, label, instance)
+            self._jobs[job.job_id] = job
+            self._active = job
+        threading.Thread(target=self._run, args=(job, work), daemon=True).start()
+        return job.job_id
 
-            job_id = str(uuid.uuid4())[:8]
-            progress_q = queue.Queue()
-
-            cancel_event = threading.Event()
-            tm1_holder = {}  # populated by core.main() with {"tm1": TM1Service}
-            job = {
-                "job_id": job_id,
-                "status": "running",
-                "mode": mode,
-                "cube_name": cube_config.get("cube", "unknown"),
-                "instance": cube_config.get("instance", "unknown"),
-                "progress_queue": progress_q,
-                "cancel_event": cancel_event,
-                "tm1_holder": tm1_holder,
-                "started_at": time.time(),
-                "completed_at": None,
-                "result_files": [],
-                "error": None,
-                "final_event": None,
-            }
-            self._jobs[job_id] = job
-            self._active_job_id = job_id
-
-            thread = threading.Thread(
-                target=self._run_job,
-                args=(job_id, mode, cube_config, password),
-                daemon=True
-            )
-            thread.start()
-            return job_id
-
-    def _run_job(self, job_id: str, mode: str, cube_config: dict, password: str):
-        job = self._jobs[job_id]
-        handler = JobLogHandler(job["progress_queue"])
-        handler.setLevel(logging.INFO)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
-
+    def _run(self, job: Job, work):
+        handler = JobLogHandler(job)
+        root = logging.getLogger()
+        root.addHandler(handler)
         try:
-            success = run_optimuspy(
-                mode=mode,
-                cube_config=cube_config,
-                config_ini_path=_config_ini_path,
-                password=password,
-                cancel_event=job["cancel_event"],
-                tm1_holder=job["tm1_holder"],
-            )
-
-            # Find result files (search both top-level legacy files and instance subdirs)
-            cube_name = cube_config.get("cube", "")
-            instance_name = cube_config.get("instance", "")
-            result_files = []
-            if RESULT_PATH.exists():
-                candidates = [f for f in RESULT_PATH.rglob("*") if f.is_file()]
-                for f in sorted(candidates, key=lambda x: x.stat().st_mtime, reverse=True):
-                    if f.name.startswith("checkpoint"):
-                        continue
-                    # Match new format (<instance>_<cube>_<ts>) or legacy (<cube>_<ts>)
-                    if f.name.startswith(f"{instance_name}_{cube_name}_") or f.name.startswith(f"{cube_name}_"):
-                        rel = f.relative_to(RESULT_PATH).as_posix()
-                        result_files.append(rel)
-                        if len(result_files) >= 4:
-                            break
-
-            final_event = {
-                "event": "complete",
-                "data": {"success": success, "result_files": result_files}
-            }
-
-            with self._lock:
-                job["status"] = "completed" if success else "failed"
-                job["result_files"] = result_files
-                job["final_event"] = final_event
-
-            job["progress_queue"].put(final_event)
+            status, data = work(job)
+            final = (status, "complete", data, None)
         except OptimizationCancelled:
-            logging.info("Optimization cancelled by user")
-            final_event = {
-                "event": "cancelled",
-                "data": {"message": "Optimization cancelled by user"}
-            }
-            with self._lock:
-                job["status"] = "cancelled"
-                job["final_event"] = final_event
-
-            job["progress_queue"].put(final_event)
+            logging.info("Job cancelled by user")
+            final = ("cancelled", "cancelled", {"message": "Cancelled by user"}, None)
         except Exception as e:
-            final_event = {
-                "event": "error_event",
-                "data": {"error": str(e)}
-            }
-            with self._lock:
-                job["status"] = "failed"
-                job["error"] = str(e)
-                job["final_event"] = final_event
-
-            job["progress_queue"].put(final_event)
+            logging.error(f"Job failed: {e}")
+            final = ("failed", "error_event", {"error": str(e)}, str(e))
         finally:
-            with self._lock:
-                job["completed_at"] = time.time()
-            job["progress_queue"].put(None)  # Sentinel
-            root_logger.removeHandler(handler)
-            with self._lock:
-                if self._active_job_id == job_id:
-                    self._active_job_id = None
+            root.removeHandler(handler)
+        job.finish(*final)
 
-    def start_transfer_job(self, instance: str, orders: dict, password: str = None) -> str:
-        with self._lock:
-            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
-                raise RuntimeError("A job is already running")
+    def cancel(self, job_id: str) -> bool:
+        """Ask a running job to stop. Returns False if it is not running.
 
-            job_id = str(uuid.uuid4())[:8]
-            progress_q = queue.Queue()
-            job = {
-                "job_id": job_id,
-                "status": "running",
-                "mode": "transfer",
-                "cube_name": f"{len(orders)} cubes",
-                "instance": instance,
-                "progress_queue": progress_q,
-                "cancel_event": threading.Event(),
-                "tm1_holder": {},
-                "started_at": time.time(),
-                "completed_at": None,
-                "result_files": [],
-                "error": None,
-                "final_event": None,
-            }
-            self._jobs[job_id] = job
-            self._active_job_id = job_id
-
-            thread = threading.Thread(
-                target=self._run_transfer_job,
-                args=(job_id, instance, orders, password),
-                daemon=True,
-            )
-            thread.start()
-            return job_id
-
-    def _run_transfer_job(self, job_id: str, instance: str, orders: dict, password: str):
-        job = self._jobs[job_id]
-        handler = JobLogHandler(job["progress_queue"])
-        handler.setLevel(logging.INFO)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
-
-        results = []
-        try:
-            with _create_tm1_connection(instance, password) as tm1:
-                total = len(orders)
-                for idx, (cube_name, dim_order) in enumerate(orders.items(), 1):
-                    job["progress_queue"].put({
-                        "event": "applying",
-                        "data": {"cube": cube_name, "index": idx, "total": total}
-                    })
-                    try:
-                        tm1.cubes.update_storage_dimension_order(cube_name, dim_order)
-                        results.append({"cube": cube_name, "success": True})
-                        logging.info(f"Applied dimension order to '{cube_name}' ({idx}/{total})")
-                    except Exception as e:
-                        results.append({"cube": cube_name, "success": False, "error": str(e)})
-                        logging.error(f"Failed to apply order to '{cube_name}': {e}")
-
-                    job["progress_queue"].put({
-                        "event": "applied",
-                        "data": results[-1]
-                    })
-
-            final_event = {
-                "event": "complete",
-                "data": {"results": results}
-            }
-            with self._lock:
-                job["status"] = "completed"
-                job["final_event"] = final_event
-            job["progress_queue"].put(final_event)
-
-        except Exception as e:
-            final_event = {
-                "event": "error_event",
-                "data": {"error": str(e)}
-            }
-            with self._lock:
-                job["status"] = "failed"
-                job["error"] = str(e)
-                job["final_event"] = final_event
-            job["progress_queue"].put(final_event)
-
-        finally:
-            with self._lock:
-                job["completed_at"] = time.time()
-            job["progress_queue"].put(None)  # Sentinel
-            root_logger.removeHandler(handler)
-            with self._lock:
-                if self._active_job_id == job_id:
-                    self._active_job_id = None
-
-    def start_optimize_db_job(self, instance: str, config: dict, password: str = None) -> str:
-        with self._lock:
-            if self._active_job_id and self._jobs[self._active_job_id]["status"] == "running":
-                raise RuntimeError("A job is already running")
-
-            job_id = str(uuid.uuid4())[:8]
-            progress_q = queue.Queue()
-            job = {
-                "job_id": job_id,
-                "status": "running",
-                "mode": "optimize-db",
-                "cube_name": "whole instance",
-                "instance": instance,
-                "progress_queue": progress_q,
-                "cancel_event": threading.Event(),
-                "tm1_holder": {},
-                "started_at": time.time(),
-                "completed_at": None,
-                "result_files": [],
-                "error": None,
-                "final_event": None,
-            }
-            self._jobs[job_id] = job
-            self._active_job_id = job_id
-
-            thread = threading.Thread(
-                target=self._run_optimize_db_job,
-                args=(job_id, instance, config, password),
-                daemon=True,
-            )
-            thread.start()
-            return job_id
-
-    def _run_optimize_db_job(self, job_id: str, instance: str, config: dict, password: str):
-        job = self._jobs[job_id]
-        handler = JobLogHandler(job["progress_queue"])
-        handler.setLevel(logging.INFO)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
-
-        try:
-            connect = tm1_connector(_config_ini_path, instance, password)
-            run = optimize_db(connect, config=config,
-                              cancel_event=job["cancel_event"],
-                              tm1_holder=job["tm1_holder"])
-            # A cancelled sweep stops at the next cube boundary and still returns
-            # a complete run artifact — it is a partial result, not a failure.
-            run_status = run.get("status")
-            success = run_status in ("completed", "stopped_time_limit")
-            final_event = {
-                "event": "complete",
-                "data": {"success": success, "run": run}
-            }
-            with self._lock:
-                if run_status == "cancelled":
-                    job["status"] = "cancelled"
-                else:
-                    job["status"] = "completed" if success else "failed"
-                job["final_event"] = final_event
-            job["progress_queue"].put(final_event)
-
-        except Exception as e:
-            final_event = {
-                "event": "error_event",
-                "data": {"error": str(e)}
-            }
-            with self._lock:
-                job["status"] = "failed"
-                job["error"] = str(e)
-                job["final_event"] = final_event
-            job["progress_queue"].put(final_event)
-
-        finally:
-            with self._lock:
-                job["completed_at"] = time.time()
-            job["progress_queue"].put(None)  # Sentinel
-            root_logger.removeHandler(handler)
-            with self._lock:
-                if self._active_job_id == job_id:
-                    self._active_job_id = None
-
-    def cancel_job(self, job_id: str) -> bool:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job or job["status"] != "running":
-                return False
-            job["cancel_event"].set()
-            tm1_holder = job.get("tm1_holder", {})
-
-        # Cancel active TM1 threads outside the lock (network call)
-        tm1 = tm1_holder.get("tm1")
-        if tm1:
-            try:
-                threads = tm1.monitoring.get_active_session_threads()
-                for t in threads:
-                    try:
-                        tm1.monitoring.cancel_thread(t["ID"])
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        Sets the job's cancel event, which every kind of work checks at its own
+        safe boundary. If the work published a TM1 service in `job.tm1_holder`,
+        that session's in-flight threads are cancelled too. Only single-cube
+        Optimize does: aborting a benchmark query is safe, while aborting a
+        ReorderDimensions throws away the rebuild the operator asked to finish.
+        """
+        job = self.get(job_id)
+        if job is None or job.status != "running":
+            return False
+        job.cancel_event.set()
+        tm1 = job.tm1_holder.get("tm1")
+        if tm1 is not None:
+            with suppress(Exception):
+                for thread in tm1.monitoring.get_active_session_threads():
+                    with suppress(Exception):
+                        tm1.monitoring.cancel_thread(thread["ID"])
         return True
 
-    def get_job(self, job_id: str) -> dict:
-        return self._jobs.get(job_id)
-
-    def list_jobs(self) -> list:
+    def get(self, job_id: str):
         with self._lock:
-            jobs = []
-            for j in self._jobs.values():
-                jobs.append({
-                    "job_id": j["job_id"],
-                    "status": j["status"],
-                    "mode": j["mode"],
-                    "cube_name": j["cube_name"],
-                    "instance": j["instance"],
-                    "started_at": j["started_at"],
-                    "completed_at": j["completed_at"],
-                    "result_files": j["result_files"],
-                    "error": j["error"],
-                })
-            return sorted(jobs, key=lambda x: x["started_at"], reverse=True)
+            return self._jobs.get(job_id)
+
+    def summaries(self) -> list:
+        with self._lock:
+            jobs = list(self._jobs.values())
+        return sorted((job.summary() for job in jobs), key=lambda s: s["started_at"], reverse=True)
+
+
+def _recent_result_files(instance: str, cube: str) -> list:
+    """Up to four newest result files for a cube, as paths relative to results/."""
+    result_files = []
+    if RESULT_PATH.exists():
+        candidates = [f for f in RESULT_PATH.rglob("*") if f.is_file()]
+        for f in sorted(candidates, key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.name.startswith("checkpoint"):
+                continue
+            # New format (<instance>_<cube>_<ts>) or legacy (<cube>_<ts>)
+            if f.name.startswith(f"{instance}_{cube}_") or f.name.startswith(f"{cube}_"):
+                result_files.append(f.relative_to(RESULT_PATH).as_posix())
+                if len(result_files) >= 4:
+                    break
+    return result_files
 
 
 # Singleton
@@ -462,6 +280,13 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _start_job(self, mode: str, label: str, instance: str, work):
+        """Start `work` as the background job and answer with its id, or 409 while one runs."""
+        try:
+            job = job_manager.get(job_manager.start(mode, label, instance, work))
+        except RuntimeError as e:
+            return self._send_json(409, {"error": str(e)})
+        self._send_json(200, {"job_id": job.job_id, "status": "running", "started_at": job.started_at})
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
@@ -472,7 +297,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
     # ---- Routing ----
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        url = urlparse(self.path)
+        path = url.path
 
         # Static file serving
         if path == "/":
@@ -497,7 +323,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._handle_list_jobs()
         elif path.startswith("/api/job/") and path.endswith("/stream"):
             job_id = path[len("/api/job/"):-len("/stream")]
-            return self._handle_job_stream(job_id)
+            return self._handle_job_stream(job_id, parse_qs(url.query))
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -899,61 +725,53 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         password = body.get("password")
         if not cube_config:
             return self._send_json(400, {"error": "Missing 'cube_config'"})
-        try:
-            job_id = job_manager.start_job(mode, cube_config, password)
-            self._send_json(200, {"job_id": job_id, "status": "running"})
-        except RuntimeError as e:
-            self._send_json(409, {"error": str(e)})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
+        cube = cube_config.get("cube", "unknown")
+        instance = cube_config.get("instance", "unknown")
+
+        def work(job):
+            success = run_optimuspy(
+                mode=mode, cube_config=cube_config, config_ini_path=_config_ini_path,
+                password=password, cancel_event=job.cancel_event, tm1_holder=job.tm1_holder)
+            job.result_files = _recent_result_files(instance, cube)
+            return ("completed" if success else "failed"), {
+                "success": success, "result_files": job.result_files}
+
+        self._start_job(mode, cube, instance, work)
 
     def _handle_cancel_job(self, job_id: str):
-        success = job_manager.cancel_job(job_id)
-        if success:
-            self._send_json(200, {"status": "cancelling"})
-        else:
-            self._send_json(404, {"error": "Job not found or not running"})
+        if job_manager.cancel(job_id):
+            return self._send_json(200, {"status": "cancelling"})
+        self._send_json(404, {"error": "Job not found or not running"})
 
-    def _handle_job_stream(self, job_id: str):
-        job = job_manager.get_job(job_id)
-        if not job:
+    def _handle_job_stream(self, job_id: str, query: dict):
+        job = job_manager.get(job_id)
+        if job is None:
             return self._send_json(404, {"error": "Job not found"})
+        # EventSource sends Last-Event-ID when it reconnects by itself; a page that
+        # reopens a stream it has already read passes ?after= instead.
+        try:
+            cursor = max(0, int(self.headers.get("Last-Event-ID") or query.get("after", ["0"])[0]))
+        except ValueError:
+            cursor = 0
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
         self.end_headers()
-
-        # If the job already finished, send the final event immediately
-        final_event = job.get("final_event")
-        if final_event:
-            try:
-                self.wfile.write(f"event: {final_event['event']}\n".encode())
-                self.wfile.write(f"data: {json.dumps(final_event['data'])}\n\n".encode())
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            return
-
-        q = job["progress_queue"]
         while True:
+            events, done = job.events_after(cursor, timeout=15)
             try:
-                msg = q.get(timeout=30)
-                if msg is None:
-                    break
-                self.wfile.write(f"event: {msg['event']}\n".encode())
-                self.wfile.write(f"data: {json.dumps(msg['data'])}\n\n".encode())
-                self.wfile.flush()
-            except queue.Empty:
-                # Heartbeat
-                try:
+                if not events and not done:
                     self.wfile.write(b": heartbeat\n\n")
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    break
+                for event in events:
+                    cursor += 1
+                    self.wfile.write(f"id: {cursor}\nevent: {event['event']}\n"
+                                     f"data: {json.dumps(event['data'])}\n\n".encode())
+                self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                break
+                return
+            if done:
+                return
 
     def _handle_transfer_scan(self, body: dict):
         instance = body.get("instance")
@@ -999,13 +817,23 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "Missing 'instance'"})
         if not orders:
             return self._send_json(400, {"error": "Missing 'orders'"})
-        try:
-            job_id = job_manager.start_transfer_job(instance, orders, password)
-            self._send_json(200, {"job_id": job_id, "status": "running"})
-        except RuntimeError as e:
-            self._send_json(409, {"error": str(e)})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
+        def work(job):
+            results = []
+            with _create_tm1_connection(instance, password) as tm1:
+                total = len(orders)
+                for index, (cube_name, dim_order) in enumerate(orders.items(), 1):
+                    job.emit("applying", {"cube": cube_name, "index": index, "total": total})
+                    try:
+                        tm1.cubes.update_storage_dimension_order(cube_name, dim_order)
+                        results.append({"cube": cube_name, "success": True})
+                        logging.info(f"Applied dimension order to '{cube_name}' ({index}/{total})")
+                    except Exception as e:
+                        results.append({"cube": cube_name, "success": False, "error": str(e)})
+                        logging.error(f"Failed to apply order to '{cube_name}': {e}")
+                    job.emit("applied", results[-1])
+            return "completed", {"results": results}
+
+        self._start_job("transfer", f"{len(orders)} cubes", instance, work)
 
     def _handle_transfer_export(self, body: dict):
         instance = body.get("instance", "")
@@ -1075,13 +903,19 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             validate_db_config(config)
         except ValueError as e:
             return self._send_json(400, {"error": str(e)})
-        try:
-            job_id = job_manager.start_optimize_db_job(instance, config, password)
-            self._send_json(200, {"job_id": job_id, "status": "running"})
-        except RuntimeError as e:
-            self._send_json(409, {"error": str(e)})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
+        def work(job):
+            run = optimize_db(tm1_connector(_config_ini_path, instance, password),
+                              config=config, cancel_event=job.cancel_event)
+            # A cancelled or time-limited sweep stops at a cube boundary and still
+            # returns a complete run artifact — a partial result, not a failure.
+            # With no qualifying cube the planner hands back the plan itself,
+            # which has no status: nothing to do is a clean finish.
+            status = {None: "completed", "completed": "completed",
+                      "stopped_time_limit": "completed",
+                      "cancelled": "cancelled"}.get(run.get("status"), "failed")
+            return status, {"success": status == "completed", "run": run}
+
+        self._start_job("optimize-db", "whole instance", instance, work)
 
     def _handle_optimize_db_runs(self):
         try:
@@ -1131,7 +965,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"results": results})
 
     def _handle_list_jobs(self):
-        self._send_json(200, {"jobs": job_manager.list_jobs()})
+        self._send_json(200, {"jobs": job_manager.summaries()})
 
     def _handle_serve_result(self, filename: str):
         # Sanitize: only serve from results/, decode URL-encoded names (e.g. spaces).

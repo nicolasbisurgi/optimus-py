@@ -545,7 +545,7 @@ def _reconnect(connect: Callable[[], object]):
 
 def execute_plan(connect: Callable[[], object], plan: dict, run: dict,
                  save: Callable[[], None], cancel_event=None,
-                 is_v12: bool = False, tm1_holder: dict = None) -> dict:
+                 is_v12: bool = False) -> dict:
     """Run the plan cube by cube. Returns the run artifact.
 
     `connect` must build a fresh TM1 service; it is called again after a dropped
@@ -564,8 +564,6 @@ def execute_plan(connect: Callable[[], object], plan: dict, run: dict,
         # Inside the try so an instance that is already down is recorded as a
         # failed run rather than raised at an unattended operator.
         tm1 = connect()
-        if tm1_holder is not None:
-            tm1_holder["tm1"] = tm1
 
         if options["disable_active_chores"]:
             disable_chores(tm1, run, _chores_to_disable(tm1, plan), save)
@@ -596,8 +594,6 @@ def execute_plan(connect: Callable[[], object], plan: dict, run: dict,
             try:
                 tm1, outcome = _reorder_cube(tm1, connect, cube, entry, state,
                                              options, is_v12, save)
-                if tm1_holder is not None:
-                    tm1_holder["tm1"] = tm1
             except OptimizeDbAborted:
                 status = "failed"
                 save()
@@ -809,8 +805,7 @@ def prepare_resume(tm1, plan: dict, run: dict, is_v12: bool = False) -> int:
 
 def optimize_db(connect: Callable[[], object], config: dict = None, plan: dict = None,
                 dry_run: bool = False, resume_plan_id: str = None,
-                result_path: Path = RESULT_PATH, cancel_event=None,
-                tm1_holder: dict = None) -> dict:
+                result_path: Path = RESULT_PATH, cancel_event=None) -> dict:
     """Plan and/or execute an Optimize DB sweep.
 
     Exactly one of `config` (fresh instructions), `plan` (a plan already on
@@ -833,7 +828,7 @@ def optimize_db(connect: Callable[[], object], config: dict = None, plan: dict =
         save = _saver(path, run)
         save()
         return execute_plan(connect, plan, run, save, cancel_event=cancel_event,
-                            is_v12=run.get("is_v12", False), tm1_holder=tm1_holder)
+                            is_v12=run.get("is_v12", False))
 
     if plan is None:
         validate_db_config(config)
@@ -862,7 +857,7 @@ def optimize_db(connect: Callable[[], object], config: dict = None, plan: dict =
                  f"{len(plan['cubes'])} cubes, {run['options']['time_limit_hours']:.2f}h limit, "
                  f"state in {path}")
     return execute_plan(connect, plan, run, save, cancel_event=cancel_event,
-                        is_v12=run["is_v12"], tm1_holder=tm1_holder)
+                        is_v12=run["is_v12"])
 
 
 def _saver(path: Path, run: dict) -> Callable[[], None]:

@@ -4,10 +4,15 @@ Nothing here reaches TM1: the tests use endpoints that only touch config.ini and
 the results folder, or jobs whose work is a stand-in function.
 """
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
+
+from optimuspy import ui
+from optimuspy.executors import OptimizationCancelled
 
 INI = (
     "[prod]\n"
@@ -94,3 +99,160 @@ def test_saving_an_instance_without_its_secrets_keeps_them(ui_server):
     assert "port = 9999" in text
     assert "password = s3cret" in text
     assert "api_key = k3y" in text
+
+
+# --- jobs --------------------------------------------------------------------
+
+def wait_done(job, timeout=5):
+    deadline = time.time() + timeout
+    while job.status == "running":
+        assert time.time() < deadline, "job did not finish"
+        time.sleep(0.01)
+
+
+def _kinds(job):
+    events, _ = job.events_after(0, timeout=0)
+    return [e["event"] for e in events if e["event"] != "log"]
+
+
+def test_a_job_ends_with_one_final_event_carrying_its_status():
+    jobs = ui.JobManager()
+
+    def work(job):
+        job.emit("progress", {"step": 1})
+        return "completed", {"success": True}
+
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", work))
+    wait_done(job)
+    events, done = job.events_after(0, timeout=0)
+    assert done
+    assert _kinds(job) == ["progress", "complete"]
+    assert events[-1]["data"] == {"success": True, "status": "completed"}
+
+
+def test_reading_the_log_does_not_consume_it():
+    jobs = ui.JobManager()
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", lambda job: ("completed", {})))
+    wait_done(job)
+    first, _ = job.events_after(0, timeout=0)
+    second, _ = job.events_after(0, timeout=0)
+    tail, done = job.events_after(len(first) - 1, timeout=0)
+    assert first == second
+    assert done and tail == first[-1:]
+
+
+def test_a_raised_cancel_ends_the_job_as_cancelled():
+    jobs = ui.JobManager()
+
+    def work(job):
+        raise OptimizationCancelled()
+
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", work))
+    wait_done(job)
+    assert job.status == "cancelled"
+    assert _kinds(job)[-1] == "cancelled"
+
+
+def test_an_error_ends_the_job_as_failed_with_its_message():
+    jobs = ui.JobManager()
+
+    def work(job):
+        raise RuntimeError("boom")
+
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", work))
+    wait_done(job)
+    events, _ = job.events_after(0, timeout=0)
+    assert job.status == "failed" and job.error == "boom"
+    assert events[-1] == {"event": "error_event", "data": {"error": "boom", "status": "failed"}}
+
+
+def test_only_one_job_runs_at_a_time():
+    jobs = ui.JobManager()
+    gate = threading.Event()
+
+    def slow(job):
+        gate.wait(5)
+        return "completed", {}
+
+    first = jobs.get(jobs.start("optimize", "A", "prod", slow))
+    with pytest.raises(RuntimeError):
+        jobs.start("optimize", "B", "prod", lambda job: ("completed", {}))
+    gate.set()
+    wait_done(first)
+    jobs.start("optimize", "B", "prod", lambda job: ("completed", {}))  # free again
+
+
+class _Monitoring:
+    def __init__(self):
+        self.cancelled = []
+
+    def get_active_session_threads(self):
+        return [{"ID": 7}]
+
+    def cancel_thread(self, thread_id):
+        self.cancelled.append(thread_id)
+
+
+class _Service:
+    def __init__(self):
+        self.monitoring = _Monitoring()
+
+
+def test_stop_aborts_server_threads_only_for_work_that_published_its_service():
+    jobs = ui.JobManager()
+    published, unpublished = _Service(), _Service()
+
+    def benchmark(job):  # single-cube Optimize: a query in flight is safe to abort
+        job.tm1_holder["tm1"] = published
+        job.cancel_event.wait(5)
+        return "cancelled", {}
+
+    job = jobs.get(jobs.start("optimize", "Sales", "prod", benchmark))
+    while "tm1" not in job.tm1_holder:
+        time.sleep(0.01)
+    assert jobs.cancel(job.job_id)
+    wait_done(job)
+    assert published.monitoring.cancelled == [7]
+
+    def rebuild(job):  # a storage reorder in flight must be left to finish
+        job.cancel_event.wait(5)
+        return "cancelled", {}
+
+    job = jobs.get(jobs.start("optimize-db", "plan", "prod", rebuild))
+    assert jobs.cancel(job.job_id)
+    wait_done(job)
+    assert unpublished.monitoring.cancelled == []
+    assert job.status == "cancelled"
+
+
+def read_stream(url, headers=None):
+    """A finished job's stream, as (id, event, data) triples, heartbeats dropped."""
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        text = resp.read().decode()
+    events = []
+    for block in text.strip().split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in block.splitlines() if not line.startswith(":"))
+        if "event" in fields:
+            events.append((int(fields["id"]), fields["event"], json.loads(fields["data"])))
+    return events
+
+
+def test_a_stream_replays_the_log_and_resumes_after_the_last_event_seen(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    jobs = ui.JobManager()
+    monkeypatch.setattr(ui, "job_manager", jobs)
+
+    def work(job):
+        for i in range(3):
+            job.emit("progress", {"i": i})
+        return "completed", {}
+
+    job = jobs.get(jobs.start("transfer", "3 cubes", "prod", work))
+    wait_done(job)
+    url = f"{base}/api/job/{job.job_id}/stream"
+    full = read_stream(url)
+    assert [e[1] for e in full if e[1] != "log"] == ["progress", "progress", "progress", "complete"]
+    assert [e[0] for e in full] == list(range(1, len(full) + 1))
+    assert read_stream(url, headers={"Last-Event-ID": "2"})[0][0] == 3
+    assert read_stream(url + "?after=2")[0][0] == 3
