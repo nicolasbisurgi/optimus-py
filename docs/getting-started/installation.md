@@ -39,8 +39,9 @@ Download the latest `.exe` build when you cannot install Python (locked-down ser
 
 1. Open the [Actions tab](https://github.com/cubewise-code/optimus-py/actions) of the repository.
 2. Click the most recent successful **Build Executable** run.
-3. Scroll to the **Artifacts** section and download `optimuspy-winOS`.
-4. Unzip — the bundle contains `optimuspy.exe` plus the `config/` folder.
+3. Scroll to the **Artifacts** section and download `optimuspy-windows`.
+4. Unzip it. The `optimuspy/` folder holds `optimuspy.exe`, `config/config.ini.example` and `samples/` (example cube configs).
+5. Double-click `optimuspy.exe` to open the web UI and add your TM1 instances under **Settings**. For the command line, copy `config/config.ini.example` to `config/config.ini` and fill it in.
 
 > 📸 **Screenshot needed:** The GitHub Actions Artifacts section showing the downloadable `.exe` bundle.
 
