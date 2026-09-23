@@ -14,7 +14,6 @@ const OptimusPy = (function () {
     // Connection
     instances: [],
     activeInstance: null,
-    password: null,
     connected: false,
     serverName: null,
     configReadOnly: false,
@@ -236,6 +235,58 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
+  // Credentials — the password typed for each instance this session
+  // ==================================================================
+  // The server never sends a stored password to the page, so a password is only
+  // ever what the user typed. A remembered null means "use config.ini". An entry
+  // is kept only once a connection with it has succeeded.
+  const Credentials = {
+    _typed: new Map(),
+
+    get(instance) {
+      return this._typed.has(instance) ? this._typed.get(instance) : null;
+    },
+
+    ensure(instance) {
+      if (this._typed.has(instance)) return Promise.resolve(true);
+      return new Promise(resolve => {
+        const body = el("div");
+        body.appendChild(el("p", { className: "text-sm text-secondary mb-4" },
+          `Connect to "${instance}". Enter the password if it is not stored in config.ini.`));
+        const group = el("div", { className: "form-group" });
+        group.appendChild(el("label", { className: "form-label" }, "Password (optional)"));
+        const input = el("input", { type: "password", className: "form-input", placeholder: "Leave blank to use config.ini" });
+        group.appendChild(input);
+        body.appendChild(group);
+
+        const connectBtn = el("button", { className: "btn btn-primary" }, "Connect");
+        const cancelBtn = el("button", { className: "btn btn-secondary", onClick: () => Modal.close() }, "Cancel");
+        const submit = async () => {
+          connectBtn.disabled = true;
+          connectBtn.textContent = "Connecting...";
+          const password = input.value || null;
+          try {
+            await Api.connect(instance, password);
+            this._typed.set(instance, password);
+            resolve(true);
+            Modal.close();
+          } catch (err) {
+            Toast.error(err.message);
+            connectBtn.disabled = false;
+            connectBtn.textContent = "Connect";
+          }
+        };
+        connectBtn.addEventListener("click", submit);
+        input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+
+        Modal.open({ title: "Connect to Instance", body, size: "sm", footer: [cancelBtn, connectBtn],
+          onClose: () => resolve(false) });
+        setTimeout(() => input.focus(), 100);
+      });
+    },
+  };
+
+  // ==================================================================
   // Toast
   // ==================================================================
   const Toast = {
@@ -319,7 +370,9 @@ const OptimusPy = (function () {
       });
     },
 
-    open({ title, body, footer, size = "md" }) {
+    open({ title, body, footer, size = "md", onClose = null }) {
+      this._settle();
+      this._onClose = onClose;
       this._previousFocus = document.activeElement;
       const titleId = "modal-title-id";
       const m = el("div", { className: `modal ${size}` },
@@ -364,6 +417,14 @@ const OptimusPy = (function () {
         this._previousFocus.focus();
         this._previousFocus = null;
       }
+      this._settle();
+    },
+
+    // Tell whoever opened the current modal that it has gone — exactly once.
+    _settle() {
+      const onClose = this._onClose;
+      this._onClose = null;
+      if (onClose) onClose();
     },
   };
 
@@ -1233,64 +1294,33 @@ const OptimusPy = (function () {
       });
     },
 
-    _promptConnect(instanceName) {
-      const body = el("div");
-      body.appendChild(el("p", { className: "text-sm text-secondary mb-4" },
-        `Connect to "${instanceName}". Enter password if it's not stored in config.ini.`));
-      const pwGroup = el("div", { className: "form-group" });
-      pwGroup.appendChild(el("label", { className: "form-label" }, "Password (optional)"));
-      const pwInput = el("input", { type: "password", className: "form-input", placeholder: "Leave blank to use config.ini" });
-      pwGroup.appendChild(pwInput);
-      body.appendChild(pwGroup);
-
-      const connectBtn = el("button", { className: "btn btn-primary" }, "Connect");
-      const cancelBtn = el("button", { className: "btn btn-secondary", onClick: () => Modal.close() }, "Cancel");
-
-      connectBtn.addEventListener("click", async () => {
-        connectBtn.disabled = true;
-        connectBtn.textContent = "Connecting...";
-        try {
-          const pw = pwInput.value || null;
-          const resp = await Api.connect(instanceName, pw);
-          state.activeInstance = instanceName;
-          state.password = pw;
-          state.connected = true;
-          state.serverName = resp.server_name;
-          // Reset cached data from previous instance, restore scan cache if available
-          state.cubeMetadata = {};
-          state.cubeViews = {};
-          state.processes = [];
-          const cached = ScanCache.load(instanceName);
-          if (cached) {
-            state.scanData = cached.data;
-            state.scanTimestamp = cached.ts;
-          } else {
-            state.scanData = null;
-            state.scanTimestamp = null;
-          }
-          Modal.close();
-          this.renderInstanceSwitcher();
-          Sidebar.loadSavedCubes();
-          Sidebar.updateActivityMonitor();
-          Toast.success(`Connected to ${resp.server_name}`);
-          // Navigate to the split-panel navigation page
-          Router.navigate("#/nav");
-        } catch (err) {
-          Toast.error(err.message);
-          connectBtn.disabled = false;
-          connectBtn.textContent = "Connect";
+    async _promptConnect(instanceName) {
+      if (!(await Credentials.ensure(instanceName))) return;
+      try {
+        const resp = await Api.connect(instanceName, Credentials.get(instanceName));
+        state.activeInstance = instanceName;
+        state.connected = true;
+        state.serverName = resp.server_name;
+        // Reset cached data from previous instance, restore scan cache if available
+        state.cubeMetadata = {};
+        state.cubeViews = {};
+        state.processes = [];
+        const cached = ScanCache.load(instanceName);
+        if (cached) {
+          state.scanData = cached.data;
+          state.scanTimestamp = cached.ts;
+        } else {
+          state.scanData = null;
+          state.scanTimestamp = null;
         }
-      });
-
-      Modal.open({
-        title: "Connect to Instance",
-        body,
-        size: "sm",
-        footer: [cancelBtn, connectBtn],
-      });
-
-      // Focus password input
-      setTimeout(() => pwInput.focus(), 100);
+        this.renderInstanceSwitcher();
+        Sidebar.loadSavedCubes();
+        Sidebar.updateActivityMonitor();
+        Toast.success(`Connected to ${resp.server_name}`);
+        Router.navigate("#/nav");
+      } catch (err) {
+        Toast.error(err.message);
+      }
     },
 
     async loadSavedCubes() {
@@ -1743,7 +1773,7 @@ const OptimusPy = (function () {
         body.appendChild(el("div", { className: "cube-card-skeleton", style: "height:52px;margin-bottom:4px" }));
       }
       try {
-        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
+        const data = await Api.scan(state.activeInstance, Credentials.get(state.activeInstance), this._ramThreshold, this._includeOptimized);
         state.scanData = data;
         state.scanTimestamp = Date.now();
         ScanCache.save(state.activeInstance, data);
@@ -2374,7 +2404,7 @@ const OptimusPy = (function () {
           await Api.saveConfig(config, filename);
           Sidebar.loadSavedCubes();
 
-          const resp = await Api.startJob("optimize", config, state.password);
+          const resp = await Api.startJob("optimize", config, Credentials.get(state.activeInstance));
           this._jobId = resp.job_id;
           StreamManager.connect(resp.job_id);
           Sidebar.updateActivityMonitor();
@@ -2483,7 +2513,7 @@ const OptimusPy = (function () {
       if (!state.cubeViews[this._cubeName]) {
         container.appendChild(el("div", { className: "text-xs text-tertiary", id: "views-loading" }, "Loading views..."));
         try {
-          const data = await Api.getViews(state.activeInstance, state.password, this._cubeName);
+          const data = await Api.getViews(state.activeInstance, Credentials.get(state.activeInstance), this._cubeName);
           state.cubeViews[this._cubeName] = data.views || [];
         } catch (err) {
           state.cubeViews[this._cubeName] = [];
@@ -2598,7 +2628,7 @@ const OptimusPy = (function () {
     async _loadProcesses(container, paramsContainer) {
       if (state.processes.length === 0) {
         try {
-          const data = await Api.getProcesses(state.activeInstance, state.password);
+          const data = await Api.getProcesses(state.activeInstance, Credentials.get(state.activeInstance));
           state.processes = data.processes || [];
         } catch {
           state.processes = [];
@@ -2690,7 +2720,7 @@ const OptimusPy = (function () {
               Modal.close();
               // Fetch params for this process
               try {
-                const data = await Api.getProcessParameters(state.activeInstance, state.password, procName);
+                const data = await Api.getProcessParameters(state.activeInstance, Credentials.get(state.activeInstance), procName);
                 const params = (data.parameters || []).map(p => ({ name: p.name, value: p.value || "" }));
                 this._selectedProcesses.push({ name: procName, params });
               } catch {
@@ -2889,7 +2919,7 @@ const OptimusPy = (function () {
         return cached.data;
       }
       // 3. Fetch from API and cache
-      const data = await Api.getCubeIntelligence(state.activeInstance, state.password, this._cubeName);
+      const data = await Api.getCubeIntelligence(state.activeInstance, Credentials.get(state.activeInstance), this._cubeName);
       state.cubeMetadata[this._cubeName] = data;
       IntelCache.save(state.activeInstance, this._cubeName, data);
       return data;
@@ -2898,7 +2928,7 @@ const OptimusPy = (function () {
     async _prefetchViews() {
       if (state.cubeViews[this._cubeName]) return state.cubeViews[this._cubeName];
       try {
-        const data = await Api.getViews(state.activeInstance, state.password, this._cubeName);
+        const data = await Api.getViews(state.activeInstance, Credentials.get(state.activeInstance), this._cubeName);
         state.cubeViews[this._cubeName] = data.views || [];
       } catch (_) {
         state.cubeViews[this._cubeName] = [];
@@ -3596,17 +3626,14 @@ const OptimusPy = (function () {
       };
     },
 
-    _passwordFor(instance) {
-      return instance === state.activeInstance ? state.password : null;
-    },
-
     // ---- Plan ----
     async _buildPlan(btn) {
       if (!this._instance) { Toast.error("Select an instance"); return; }
+      if (!(await Credentials.ensure(this._instance))) return;
       btn.disabled = true;
       btn.textContent = "Building plan\u2026";
       try {
-        const plan = await Api.optimizeDbPlan(this._instance, this._passwordFor(this._instance), this._instructions());
+        const plan = await Api.optimizeDbPlan(this._instance, Credentials.get(this._instance), this._instructions());
         this._plan = plan;
         this._renderPlan($("#optdb-plan"));
         const runBtn = $("#optdb-run-btn");
@@ -3729,7 +3756,7 @@ const OptimusPy = (function () {
           btn.disabled = true;
           btn.textContent = "Starting\u2026";
           try {
-            const resp = await Api.optimizeDbRun(this._instance, this._passwordFor(this._instance), this._instructions());
+            const resp = await Api.optimizeDbRun(this._instance, Credentials.get(this._instance), this._instructions());
             this._jobId = resp.job_id;
             StreamManager.connect(resp.job_id);
             this._renderProgress($("#optdb-progress"));
@@ -3991,11 +4018,12 @@ const OptimusPy = (function () {
       const btn = el("button", { className: "btn btn-primary btn-sm", style: "margin-left:auto;flex-shrink:0" },
         "Re-enable chores");
       btn.addEventListener("click", async () => {
+        if (!(await Credentials.ensure(run.instance))) return;
         btn.disabled = true;
         btn.textContent = "Re-enabling\u2026";
         try {
           const resp = await Api.optimizeDbRestoreChores(
-            run.instance, this._passwordFor(run.instance), run.plan_id);
+            run.instance, Credentials.get(run.instance), run.plan_id);
           Toast.success(`Re-activated ${(resp.restored || []).length} chore(s)`);
           this._renderRecovery(recoveryContainer || $("#optdb-recovery"));
         } catch (err) {
@@ -4228,7 +4256,7 @@ const OptimusPy = (function () {
           testBtn.disabled = true;
           testBtn.textContent = "Testing...";
           try {
-            const pw = (pwInput && pwInput.value) || state.password || null;
+            const pw = (pwInput && pwInput.value) || Credentials.get(instanceName);
             const resp = await Api.connect(instanceName, pw);
             Toast.success(`Connected to ${resp.server_name} (${resp.cube_count} cubes)`);
           } catch (err) {
