@@ -2865,12 +2865,16 @@ const OptimusPy = (function () {
           } else if (replaying) {
             return;
           } else if (event === "complete") {
-            statusDot.className = "status-dot completed";
-            statusText.textContent = "Completed";
+            // A run that fails without raising still ends with "complete"; its
+            // status says whether it succeeded.
+            const ok = data.status === "completed";
+            statusDot.className = `status-dot ${ok ? "completed" : "failed"}`;
+            statusText.textContent = ok ? "Completed" : "Failed";
             stopBtn.style.display = "none";
             this._timer.stop();
             Sidebar.updateActivityMonitor();
-            Toast.success("Optimization completed!");
+            if (ok) Toast.success("Optimization completed!");
+            else Toast.error("Optimization failed — see the log above");
           } else if (event === "error_event") {
             statusDot.className = "status-dot failed";
             statusText.textContent = "Failed";

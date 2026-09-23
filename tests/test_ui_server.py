@@ -333,6 +333,26 @@ def test_a_request_that_logs_during_a_job_stays_out_of_the_job_log(ui_server, mo
     assert "from a request" not in messages
 
 
+def test_an_optimization_that_reports_failure_finishes_failed(ui_server, monkeypatch):
+    # core.main reports a fatal error by returning False, not by raising, so the
+    # job still ends with "complete". The status in that event is the only thing
+    # that tells the page the run failed.
+    base, _ = ui_server(INI)
+    jobs = ui.JobManager()
+    monkeypatch.setattr(ui, "job_manager", jobs)
+    monkeypatch.setattr(ui, "run_optimuspy", lambda **kwargs: False)
+    status, _, text = request("POST", f"{base}/api/job/start", body={
+        "mode": "optimize", "cube_config": {"instance": "prod", "cube": "Sales"}})
+    assert status == 200
+    job = jobs.get(json.loads(text)["job_id"])
+    wait_done(job)
+    events, _ = job.events_after(0, timeout=0)
+    assert job.status == "failed"
+    assert events[-1]["event"] == "complete"
+    assert events[-1]["data"]["status"] == "failed"
+    assert events[-1]["data"]["success"] is False
+
+
 # --- sync order ----------------------------------------------------------------
 
 class _Cubes:
