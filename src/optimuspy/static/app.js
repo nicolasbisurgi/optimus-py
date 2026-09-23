@@ -225,8 +225,8 @@ const OptimusPy = (function () {
     optimizeDbPlan(instance, password, options) {
       return this._fetch("POST", "/api/optimize-db/plan", Object.assign({ instance, password }, options));
     },
-    optimizeDbRun(instance, password, options) {
-      return this._fetch("POST", "/api/optimize-db/run", Object.assign({ instance, password }, options));
+    optimizeDbRun(instance, password, planId) {
+      return this._fetch("POST", "/api/optimize-db/run", { instance, password, plan_id: planId });
     },
     optimizeDbRuns() { return this._fetch("POST", "/api/optimize-db/runs", {}); },
     optimizeDbRestoreChores(instance, password, planId) {
@@ -3480,6 +3480,7 @@ const OptimusPy = (function () {
     _excludeCubes: [],
 
     _plan: null,
+    _planKey: null,
     _jobId: null,
     _unsubStream: null,
     _timer: null,
@@ -3639,7 +3640,7 @@ const OptimusPy = (function () {
       buildBtn.addEventListener("click", () => this._buildPlan(buildBtn));
       actions.appendChild(buildBtn);
       const runBtn = el("button", { className: "btn btn-primary", id: "optdb-run-btn" }, "Run plan");
-      runBtn.disabled = !this._plan;
+      runBtn.disabled = !this._plan || !(this._plan.cubes || []).length;
       runBtn.addEventListener("click", () => this._runPlan(runBtn));
       actions.appendChild(runBtn);
       actions.appendChild(el("span", { className: "text-xs text-tertiary" },
@@ -3708,6 +3709,12 @@ const OptimusPy = (function () {
       };
     },
 
+    // What the plan on screen was built from. Running is refused once this has
+    // changed, so a run is always the plan the operator is looking at.
+    _planKeyNow() {
+      return JSON.stringify([this._instance, this._instructions()]);
+    },
+
     // ---- Plan ----
     async _buildPlan(btn) {
       if (!this._instance) { Toast.error("Select an instance"); return; }
@@ -3717,9 +3724,10 @@ const OptimusPy = (function () {
       try {
         const plan = await Api.optimizeDbPlan(this._instance, Credentials.get(this._instance), this._instructions());
         this._plan = plan;
+        this._planKey = this._planKeyNow();
         this._renderPlan($("#optdb-plan"));
         const runBtn = $("#optdb-run-btn");
-        if (runBtn) runBtn.disabled = false;
+        if (runBtn) runBtn.disabled = !(plan.cubes || []).length;
         Toast.success(`Plan ready — ${(plan.cubes || []).length} cube(s) queued`);
       } catch (err) {
         Toast.error(err.message);
@@ -3830,27 +3838,39 @@ const OptimusPy = (function () {
 
     // ---- Run ----
     _runPlan(btn) {
-      if (!this._instance) { Toast.error("Select an instance"); return; }
-      const cubeCount = this._plan ? (this._plan.cubes || []).length : 0;
-      Modal.confirm(
-        `Reorder ${cubeCount} cube(s) on '${this._instance}'? The plan is rebuilt from these instructions when the run starts, and each cube is rebuilt in place on the server.`,
-        async () => {
-          btn.disabled = true;
-          btn.textContent = "Starting\u2026";
-          try {
-            const resp = await Api.optimizeDbRun(this._instance, Credentials.get(this._instance), this._instructions());
-            this._jobId = resp.job_id;
-            StreamManager.connect(resp.job_id);
-            this._renderProgress($("#optdb-progress"));
-            Sidebar.updateActivityMonitor();
-            Toast.success(`Optimize DB run started (${resp.job_id})`);
-          } catch (err) {
-            Toast.error(err.message);
-          } finally {
-            btn.disabled = false;
-            btn.textContent = "Run plan";
-          }
-        });
+      const plan = this._plan;
+      if (!plan) return;
+      if (this._planKeyNow() !== this._planKey) {
+        Toast.error("The instructions changed after this plan was built — build the plan again before running it");
+        return;
+      }
+      this._confirmRun(plan.instance, plan.plan_id,
+        `Reorder ${(plan.cubes || []).length} cube(s) on '${plan.instance}' exactly as listed in plan ${plan.plan_id}? Each cube is rebuilt in place on the server.`,
+        btn);
+    },
+
+    // Start plan `planId`: a fresh run, or the continuation of one already on
+    // disk — the server decides which. Shared by Run plan and every Resume button.
+    _confirmRun(instance, planId, message, btn) {
+      Modal.confirm(message, async () => {
+        if (!(await Credentials.ensure(instance))) return;
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Starting…";
+        try {
+          const resp = await Api.optimizeDbRun(instance, Credentials.get(instance), planId);
+          this._jobId = resp.job_id;
+          StreamManager.connect(resp.job_id);
+          this._renderProgress($("#optdb-progress"));
+          Sidebar.updateActivityMonitor();
+          Toast.success(`Optimize DB run started (${resp.job_id})`);
+        } catch (err) {
+          Toast.error(err.message);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
     },
 
     async _adoptActiveJob() {
@@ -4081,6 +4101,15 @@ const OptimusPy = (function () {
             key: "chores_state", label: "Chores", render: r => r.chores_pending_restore
               ? el("span", { className: "badge badge-warning" }, "disabled")
               : el("span", { className: "text-xs text-tertiary" }, r.chores_state || "untouched"),
+          },
+          {
+            key: "resume", label: "", sortable: false,
+            render: r => r.status === "completed" ? null : el("button", {
+              className: "btn btn-ghost btn-sm",
+              onClick: e => this._confirmRun(r.instance, r.plan_id,
+                `Continue run ${r.plan_id} on '${r.instance}'? Cubes it already finished are re-checked and kept; the rest run against the run's original deadline.`,
+                e.currentTarget),
+            }, "Resume"),
           },
         ],
         data: runs,

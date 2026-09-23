@@ -31,6 +31,7 @@ by design: the budget exists to stop the sweep from running forever, not to
 guarantee an end time.
 """
 import fnmatch
+import glob
 import json
 import logging
 import math
@@ -400,7 +401,7 @@ def read_json(path: Path) -> dict:
 
 def find_run(plan_id: str, result_path: Path = RESULT_PATH) -> Tuple[Path, dict]:
     """Locate a run artifact by plan id, without needing the instance name."""
-    matches = sorted(Path(result_path).glob(f"*/{RUN_PREFIX}{plan_id}.json"))
+    matches = sorted(Path(result_path).glob(f"*/{RUN_PREFIX}{glob.escape(plan_id)}.json"))
     if not matches:
         raise FileNotFoundError(f"No Optimize DB run found for plan id '{plan_id}'")
     return matches[0], read_json(matches[0])

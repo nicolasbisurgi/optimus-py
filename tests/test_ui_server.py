@@ -415,3 +415,96 @@ def test_stop_ends_a_sync_between_cubes(ui_server, monkeypatch):
     wait_done(job)
     assert cubes.applied == ["A"]     # the cube in hand finishes; B is never started
     assert job.status == "cancelled"
+
+
+# --- optimize db ---------------------------------------------------------------
+
+PLAN_INI = (
+    "[Planning Prod]\naddress=10.0.0.1\nport=1\nuser=admin\n"
+    "[dev]\naddress=10.0.0.2\nport=1\nuser=admin\n"
+)
+PLAN_ID = "Planning Prod_2026-09-23_22-00-00"
+
+
+def _write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _plan_file(tmp_path, plan_id=PLAN_ID, instance="Planning Prod"):
+    return tmp_path / "results" / instance / f"optdb_plan_{plan_id}.json"
+
+
+def _run_file(tmp_path, plan_id=PLAN_ID, instance="Planning Prod"):
+    return tmp_path / "results" / instance / f"optdb_run_{plan_id}.json"
+
+
+def _run_plan(base, monkeypatch, body):
+    """POST /api/optimize-db/run with optimize_db stubbed; returns (status, payload, job, kwargs)."""
+    jobs = ui.JobManager()
+    monkeypatch.setattr(ui, "job_manager", jobs)
+    seen = {}
+
+    def fake_optimize_db(connect, **kwargs):
+        seen.update(kwargs)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(ui, "optimize_db", fake_optimize_db)
+    status, _, text = request("POST", f"{base}/api/optimize-db/run", body=body)
+    payload = json.loads(text)
+    job = jobs.get(payload["job_id"]) if status == 200 else None
+    if job is not None:
+        wait_done(job)
+    return status, payload, job, seen
+
+
+def test_running_a_plan_executes_the_plan_that_was_reviewed(ui_server, monkeypatch, tmp_path):
+    base, _ = ui_server(PLAN_INI)
+    plan = {"plan_id": PLAN_ID, "instance": "Planning Prod", "cubes": [{"cube": "Sales"}]}
+    _write_json(_plan_file(tmp_path), plan)
+    status, _, job, seen = _run_plan(base, monkeypatch, {"instance": "Planning Prod", "plan_id": PLAN_ID})
+    assert status == 200
+    assert seen["plan"] == plan
+    # No instructions to re-plan from, and no TM1 service handed to Stop.
+    assert sorted(seen) == ["cancel_event", "plan"]
+    assert job.label == PLAN_ID
+
+
+def test_running_a_plan_that_already_started_continues_its_run(ui_server, monkeypatch, tmp_path):
+    # A run left "running" is what a killed or restarted UI leaves behind.
+    base, _ = ui_server(PLAN_INI)
+    _write_json(_plan_file(tmp_path), {"plan_id": PLAN_ID, "instance": "Planning Prod", "cubes": []})
+    _write_json(_run_file(tmp_path), {"plan_id": PLAN_ID, "instance": "Planning Prod", "status": "running"})
+    status, _, _, seen = _run_plan(base, monkeypatch, {"instance": "Planning Prod", "plan_id": PLAN_ID})
+    assert status == 200
+    assert sorted(seen) == ["cancel_event", "resume_plan_id"]
+    assert seen["resume_plan_id"] == PLAN_ID
+
+
+def test_a_run_is_only_continued_on_its_own_instance(ui_server, monkeypatch, tmp_path):
+    base, _ = ui_server(PLAN_INI)
+    _write_json(_run_file(tmp_path), {"plan_id": PLAN_ID, "instance": "Planning Prod", "status": "cancelled"})
+    status, _, _, seen = _run_plan(base, monkeypatch, {"instance": "dev", "plan_id": PLAN_ID})
+    assert status == 400
+    assert seen == {}
+
+
+def test_an_unknown_plan_is_not_found(ui_server, monkeypatch):
+    base, _ = ui_server(PLAN_INI)
+    status, _, _, seen = _run_plan(base, monkeypatch, {"instance": "Planning Prod", "plan_id": PLAN_ID})
+    assert status == 404
+    assert seen == {}
+
+
+@pytest.mark.parametrize("body,expected", [
+    ({"instance": "Planning Prod"}, 400),                                  # instructions, no plan id
+    ({"instance": "nowhere", "plan_id": PLAN_ID}, 400),                    # not in config.ini
+    ({"instance": "Planning Prod", "plan_id": "../../etc/x"}, 400),        # a path, not an id
+    ({"instance": "Planning Prod", "plan_id": "*"}, 404),                  # a pattern matches nothing
+])
+def test_a_plan_id_names_exactly_one_plan(ui_server, monkeypatch, tmp_path, body, expected):
+    base, _ = ui_server(PLAN_INI)
+    _write_json(_run_file(tmp_path), {"plan_id": PLAN_ID, "instance": "Planning Prod", "status": "cancelled"})
+    status, _, _, seen = _run_plan(base, monkeypatch, body)
+    assert status == expected
+    assert seen == {}

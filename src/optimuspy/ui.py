@@ -33,7 +33,8 @@ from optimuspy.core import (
 from optimuspy.executors import OptimizationCancelled
 from optimuspy.metrics import detect_is_v12
 from optimuspy.optimize_db import (
-    list_runs, optimize_db, restore_chores_for_plan, validate_db_config
+    find_run, list_runs, optimize_db, plan_path, read_json, restore_chores_for_plan,
+    validate_db_config
 )
 
 DEFAULT_PORT = 8765
@@ -922,26 +923,41 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
     def _handle_optimize_db_run(self, body: dict):
         instance = body.get("instance")
         password = body.get("password")
-        if not instance:
-            return self._send_json(400, {"error": "Missing 'instance'"})
-        config = self._optimize_db_config(body)
+        plan_id = body.get("plan_id")
+        if not instance or not plan_id:
+            return self._send_json(400, {"error": "Missing 'instance' or 'plan_id'"})
+        if instance not in get_tm1_config(_config_ini_path) or Path(plan_id).name != plan_id:
+            return self._send_json(400, {"error": "Unknown instance or malformed plan id"})
+        # A plan that already has a run on disk was started before: running it
+        # again continues that run against its original deadline. Otherwise the
+        # plan file the operator reviewed is executed as written. Nothing is
+        # re-planned here.
         try:
-            validate_db_config(config)
-        except ValueError as e:
-            return self._send_json(400, {"error": str(e)})
+            _, existing = find_run(plan_id)
+        except FileNotFoundError:
+            path = plan_path(plan_id, instance)
+            if not path.is_file():
+                return self._send_json(404, {"error": f"No plan '{plan_id}' for instance '{instance}'"})
+            source = {"plan": read_json(path)}
+        else:
+            if existing.get("instance") != instance:
+                return self._send_json(400, {
+                    "error": f"Plan '{plan_id}' belongs to instance '{existing.get('instance')}'"})
+            source = {"resume_plan_id": plan_id}
+        connect = tm1_connector(_config_ini_path, instance, password)
+
         def work(job):
-            run = optimize_db(tm1_connector(_config_ini_path, instance, password),
-                              config=config, cancel_event=job.cancel_event)
+            run = optimize_db(connect, cancel_event=job.cancel_event, **source)
             # A cancelled or time-limited sweep stops at a cube boundary and still
             # returns a complete run artifact — a partial result, not a failure.
-            # With no qualifying cube the planner hands back the plan itself,
-            # which has no status: nothing to do is a clean finish.
+            # A plan with no cube to reorder comes back as the plan itself, with
+            # no status: nothing to do is a clean finish.
             status = {None: "completed", "completed": "completed",
                       "stopped_time_limit": "completed",
                       "cancelled": "cancelled"}.get(run.get("status"), "failed")
             return status, {"success": status == "completed", "run": run}
 
-        self._start_job("optimize-db", "whole instance", instance, work)
+        self._start_job("optimize-db", plan_id, instance, work)
 
     def _handle_optimize_db_runs(self):
         try:

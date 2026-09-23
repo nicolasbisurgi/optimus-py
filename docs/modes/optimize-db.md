@@ -169,6 +169,8 @@ A cube left as `in_flight` — the process died while its rebuild was running �
 
 A dropped connection mid-run is handled without resume: the run reconnects up to three times with a 30s / 60s / 120s backoff. A server still unreachable after that is treated as down and the run fails.
 
+**From the UI.** *Build plan* writes the plan file and shows it. *Run plan* executes that file exactly as shown — nothing is re-planned — and is refused if the instructions were changed after the plan was built. Every run that did not complete is listed under *Previous runs* with a **Resume** button, which does what `--resume <plan-id>` does.
+
 ## After the run
 
 !!! warning "The saving is visible only after a TM1 restart"
