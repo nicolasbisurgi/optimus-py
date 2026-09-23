@@ -831,19 +831,33 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "Missing 'orders'"})
         def work(job):
             results = []
+            total = len(orders)
             with _create_tm1_connection(instance, password) as tm1:
-                total = len(orders)
-                for index, (cube_name, dim_order) in enumerate(orders.items(), 1):
-                    job.emit("applying", {"cube": cube_name, "index": index, "total": total})
+                for index, (cube, order) in enumerate(orders.items(), 1):
+                    # Between cubes is the only safe place to stop: a storage
+                    # reorder already sent runs to completion on the server.
+                    if job.cancel_event.is_set():
+                        break
                     try:
-                        tm1.cubes.update_storage_dimension_order(cube_name, dim_order)
-                        results.append({"cube": cube_name, "success": True})
-                        logging.info(f"Applied dimension order to '{cube_name}' ({index}/{total})")
+                        if list(tm1.cubes.get_storage_dimension_order(cube_name=cube)) == list(order):
+                            result = {"cube": cube, "status": "skipped"}
+                            logging.info(f"'{cube}' already has this order — skipped ({index}/{total})")
+                        else:
+                            tm1.cubes.update_storage_dimension_order(cube, order)
+                            result = {"cube": cube, "status": "applied"}
+                            logging.info(f"Applied dimension order to '{cube}' ({index}/{total})")
                     except Exception as e:
-                        results.append({"cube": cube_name, "success": False, "error": str(e)})
-                        logging.error(f"Failed to apply order to '{cube_name}': {e}")
-                    job.emit("applied", results[-1])
-            return "completed", {"results": results}
+                        result = {"cube": cube, "status": "failed", "error": str(e)}
+                        logging.error(f"Failed to apply order to '{cube}': {e}")
+                    results.append(result)
+                    job.emit("progress", dict(result, index=index, total=total))
+            if len(results) < total:
+                status = "cancelled"
+            elif any(r["status"] == "failed" for r in results):
+                status = "failed"
+            else:
+                status = "completed"
+            return status, {"success": status == "completed", "results": results}
 
         self._start_job("transfer", f"{len(orders)} cubes", instance, work)
 

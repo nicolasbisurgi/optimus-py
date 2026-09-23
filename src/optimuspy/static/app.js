@@ -3073,6 +3073,12 @@ const OptimusPy = (function () {
     _targetOrders: {},
     _transferredCubes: {},
     _targetMissing: [],
+    _jobId: null,
+    _applyTarget: null,
+    _applyTotal: 0,
+    _applyResults: [],
+    _applyDone: null,
+    _unsubApply: null,
 
     _includeOptimized: true,
 
@@ -3098,6 +3104,9 @@ const OptimusPy = (function () {
       panels.appendChild(targetPanel);
 
       page.appendChild(panels);
+      const applyContainer = el("div", { id: "transfer-apply" });
+      page.appendChild(applyContainer);
+      this._renderApplyPanel(applyContainer);
     },
 
     _buildSourcePanel(panel) {
@@ -3114,10 +3123,11 @@ const OptimusPy = (function () {
         const inst = instanceSelect.value;
         if (!inst) { Toast.error("Select a source instance"); return; }
         this._sourceInstance = inst;
+        if (!(await Credentials.ensure(inst))) return;
         connectBtn.disabled = true;
         connectBtn.textContent = "Scanning...";
         try {
-          const data = await Api.transferScan(inst, null, 100);
+          const data = await Api.transferScan(inst, Credentials.get(inst), 100);
           this._sourceCubes = data.candidates || [];
           this._sourceConnected = true;
           Toast.success(`Scanned ${this._sourceCubes.length} cubes`);
@@ -3201,6 +3211,7 @@ const OptimusPy = (function () {
         const inst = instanceSelect.value;
         if (!inst) { Toast.error("Select a target instance"); return; }
         this._targetInstance = inst;
+        if (!(await Credentials.ensure(inst))) return;
         this._targetConnected = true;
         if (this._sourceInstance && this._targetInstance === this._sourceInstance) {
           Toast.info("Source and target are the same instance");
@@ -3290,27 +3301,34 @@ const OptimusPy = (function () {
       if (transferredNames.length > 0) {
         const actionsRow = el("div", { className: "flex gap-2 mt-3 flex-wrap" });
 
-        const applyBtn = el("button", { className: "btn btn-primary", onClick: async () => {
+        const applyBtn = el("button", { className: "btn btn-primary", onClick: () => {
           if (!this._targetConnected) { Toast.error("Connect to target instance first"); return; }
           const orders = {};
           Object.entries(this._transferredCubes).forEach(([name, cube]) => {
-            if (!this._targetMissing.includes(name)) {
-              orders[name] = cube.proposed;
-            }
+            if (!this._targetMissing.includes(name)) orders[name] = cube.proposed;
           });
-          if (Object.keys(orders).length === 0) { Toast.error("No valid cubes to apply"); return; }
-          applyBtn.disabled = true;
-          applyBtn.textContent = "Applying...";
-          try {
-            const resp = await Api.transferApply(this._targetInstance, null, orders);
-            Toast.success(`Transfer job started (${resp.job_id})`);
-            Router.navigate("#/jobs");
-          } catch (err) {
-            Toast.error(err.message);
-            applyBtn.disabled = false;
-            applyBtn.textContent = "Apply All";
-          }
+          const names = Object.keys(orders);
+          if (names.length === 0) { Toast.error("No valid cubes to apply"); return; }
+          const unchanged = names.filter(name => {
+            const current = this._transferredCubes[name].current;
+            return current && JSON.stringify(current) === JSON.stringify(orders[name]);
+          });
+          const target = this._targetInstance;
+          Modal.confirm(
+            `Apply the storage order to ${names.length - unchanged.length} cube(s) on '${target}'? ` +
+            "Each one is rebuilt in place on the server and is blocked while it runs." +
+            (unchanged.length ? ` ${unchanged.length} already match and will be skipped.` : ""),
+            async () => {
+              try {
+                const resp = await Api.transferApply(target, Credentials.get(target), orders);
+                this._watchApply(resp.job_id, target, names.length);
+                Sidebar.updateActivityMonitor();
+              } catch (err) {
+                Toast.error(err.message);
+              }
+            });
         }}, "Apply All");
+        applyBtn.disabled = !!(this._jobId && !this._applyDone);
         actionsRow.appendChild(applyBtn);
 
         const exportBtn = el("button", { className: "btn btn-secondary", onClick: async () => {
@@ -3339,7 +3357,7 @@ const OptimusPy = (function () {
 
     async _fetchTargetOrders(cubeNames) {
       try {
-        const data = await Api.transferTargetOrders(this._targetInstance, null, cubeNames);
+        const data = await Api.transferTargetOrders(this._targetInstance, Credentials.get(this._targetInstance), cubeNames);
         Object.entries(data.orders || {}).forEach(([name, order]) => {
           if (this._transferredCubes[name]) {
             this._transferredCubes[name].current = order;
@@ -3349,6 +3367,70 @@ const OptimusPy = (function () {
       } catch (err) {
         Toast.error(`Failed to fetch target orders: ${err.message}`);
       }
+    },
+
+    // ---- Apply: one row per cube, as the server reports it ----
+    _watchApply(jobId, target, total) {
+      if (this._unsubApply) this._unsubApply();
+      this._jobId = jobId;
+      this._applyTarget = target;
+      this._applyTotal = total;
+      this._applyResults = [];
+      this._applyDone = null;
+      StreamManager.connect(jobId);
+      // Kept across navigation: the rows are held here, and the panel is redrawn
+      // only while the page is on screen.
+      this._unsubApply = StreamManager.subscribe(jobId, (event, data) => {
+        if (event === "log") return;
+        if (event === "progress") {
+          this._applyResults.push(data);
+        } else {
+          this._applyDone = event === "complete" ? data : { status: "failed", error: data && data.error };
+          const failed = this._applyResults.filter(r => r.status === "failed").length;
+          if (this._applyDone.status === "completed") Toast.success(`Storage order applied on '${target}'`);
+          else if (this._applyDone.status === "cancelled") Toast.info("Sync stopped");
+          else Toast.error(failed ? `${failed} cube(s) failed on '${target}' — see the list` : `Sync failed: ${this._applyDone.error || "unknown error"}`);
+          Sidebar.updateActivityMonitor();
+        }
+        this._renderApplyPanel($("#transfer-apply"));
+      });
+      this._renderApplyPanel($("#transfer-apply"));
+    },
+
+    _renderApplyPanel(container) {
+      if (!container) return;
+      container.innerHTML = "";
+      if (!this._jobId) return;
+      const done = this._applyDone;
+      const count = status => this._applyResults.filter(r => r.status === status).length;
+      const card = el("div", { className: "card mt-4" });
+      const header = el("div", { className: "card-header" });
+      header.appendChild(el("div", { className: "card-title" }, `Applied to '${this._applyTarget}'`));
+      header.appendChild(el("span", { className: "text-sm text-secondary" },
+        `${count("applied")} applied · ${count("skipped")} skipped · ${count("failed")} failed — ` +
+        (done ? done.status : `${this._applyResults.length} of ${this._applyTotal}`)));
+      if (!done) {
+        const stopBtn = el("button", { className: "btn btn-danger btn-sm" }, "Stop after current cube");
+        stopBtn.addEventListener("click", async () => {
+          stopBtn.disabled = true;
+          try { await Api.cancelJob(this._jobId); } catch (err) { Toast.error("Stop failed: " + err.message); stopBtn.disabled = false; }
+        });
+        header.appendChild(stopBtn);
+      }
+      card.appendChild(header);
+      const badge = { applied: "badge-success", skipped: "badge-neutral", failed: "badge-error" };
+      card.appendChild(createTable({
+        columns: [
+          { key: "index", label: "#", align: "right" },
+          { key: "cube", label: "Cube" },
+          { key: "status", label: "Result", render: r => el("span", { className: `badge ${badge[r.status]}` }, r.status) },
+          { key: "error", label: "Detail", value: r => r.error || "" },
+        ],
+        data: this._applyResults,
+        filterable: false,
+        emptyMessage: "Waiting for the first cube…",
+      }).el);
+      container.appendChild(card);
     },
 
     unmount() {},

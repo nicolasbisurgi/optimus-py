@@ -330,3 +330,88 @@ def test_a_request_that_logs_during_a_job_stays_out_of_the_job_log(ui_server, mo
     messages = [e["data"]["message"] for e in events if e["event"] == "log"]
     assert "from the job" in messages
     assert "from a request" not in messages
+
+
+# --- sync order ----------------------------------------------------------------
+
+class _Cubes:
+    """Storage orders by cube name. A cube in `broken` fails to read. With a
+    `gate`, reading cube 'A' signals `entered` and then waits for the gate."""
+
+    def __init__(self, orders, broken=(), gate=None):
+        self.orders = {name: list(order) for name, order in orders.items()}
+        self.broken = set(broken)
+        self.gate = gate
+        self.entered = threading.Event()
+        self.applied = []
+
+    def get_storage_dimension_order(self, cube_name):
+        if self.gate is not None and cube_name == "A":
+            self.entered.set()
+            self.gate.wait(5)
+        if cube_name in self.broken:
+            raise RuntimeError(f"cube '{cube_name}' is locked")
+        return list(self.orders[cube_name])
+
+    def update_storage_dimension_order(self, cube_name, order):
+        self.applied.append(cube_name)
+        self.orders[cube_name] = list(order)
+        return 0.0
+
+
+class _SyncTarget:
+    def __init__(self, cubes):
+        self.cubes = cubes
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _sync(base, monkeypatch, cubes, orders):
+    jobs = ui.JobManager()
+    monkeypatch.setattr(ui, "job_manager", jobs)
+    monkeypatch.setattr(ui, "_create_tm1_connection", lambda instance, password=None: _SyncTarget(cubes))
+    status, _, text = request("POST", f"{base}/api/transfer/apply", body={"instance": "prod", "orders": orders})
+    assert status == 200
+    return jobs, jobs.get(json.loads(text)["job_id"])
+
+
+def test_sync_reports_each_cube_and_fails_when_any_cube_failed(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    cubes = _Cubes({"Same": ["a", "b"], "Change": ["a", "b"], "Locked": ["a", "b"]}, broken={"Locked"})
+    _, job = _sync(base, monkeypatch, cubes,
+                   {"Same": ["a", "b"], "Change": ["b", "a"], "Locked": ["b", "a"]})
+    wait_done(job)
+    events, _ = job.events_after(0, timeout=0)
+    progress = [e["data"] for e in events if e["event"] == "progress"]
+    assert [(p["cube"], p["status"]) for p in progress] == [
+        ("Same", "skipped"), ("Change", "applied"), ("Locked", "failed")]
+    assert [(p["index"], p["total"]) for p in progress] == [(1, 3), (2, 3), (3, 3)]
+    assert "locked" in progress[2]["error"]
+    assert cubes.applied == ["Change"]            # the unchanged cube is not rebuilt
+    assert job.status == "failed"
+    assert events[-1]["data"]["success"] is False
+
+
+def test_sync_with_nothing_failed_completes(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    cubes = _Cubes({"Change": ["a", "b"]})
+    _, job = _sync(base, monkeypatch, cubes, {"Change": ["b", "a"]})
+    wait_done(job)
+    assert job.status == "completed"
+
+
+def test_stop_ends_a_sync_between_cubes(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    gate = threading.Event()
+    cubes = _Cubes({"A": ["a", "b"], "B": ["a", "b"]}, gate=gate)
+    jobs, job = _sync(base, monkeypatch, cubes, {"A": ["b", "a"], "B": ["b", "a"]})
+    assert cubes.entered.wait(5)      # the job is inside cube A
+    assert jobs.cancel(job.job_id)
+    gate.set()
+    wait_done(job)
+    assert cubes.applied == ["A"]     # the cube in hand finishes; B is never started
+    assert job.status == "cancelled"

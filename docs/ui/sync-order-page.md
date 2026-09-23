@@ -25,7 +25,9 @@ The drag order matters — the order in which you drop cubes into the Target pan
 
 ## Apply All
 
-Runs all proposed orders sequentially as a background job. Live progress streams to the [Jobs page](jobs-page.md). Each cube reports `success` or `error` independently — one failure does not abort the batch.
+Asks for confirmation, naming how many cubes will be rebuilt on the target and how many already have the proposed order. It then applies the orders one cube at a time as a background job, and a results panel below the two instances fills in as it goes. Each cube is reported as **applied**, **skipped** (already in that order, so it is not rebuilt) or **failed** with the server's message. One failure does not stop the batch, but the job ends as failed so it cannot be mistaken for a clean sync. **Stop after current cube** ends the batch at the next cube boundary: a reorder already sent always finishes.
+
+Instances whose password is not stored in `config.ini` are asked for it once per session when you connect them.
 
 !!! warning "Production effect"
     Apply All directly mutates the target cube via `update_storage_dimension_order`. There is no preview-only mode. Verify the target panel before clicking.
