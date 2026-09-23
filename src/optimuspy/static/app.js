@@ -272,6 +272,7 @@ const OptimusPy = (function () {
       return this._fetch("POST", "/api/optimize-db/run", { instance, password, plan_id: planId });
     },
     optimizeDbRuns() { return this._fetch("POST", "/api/optimize-db/runs", {}); },
+    optimizeDbRunState(planId) { return this._fetch("GET", `/api/optimize-db/run/${encodeURIComponent(planId)}`); },
     optimizeDbRestoreChores(instance, password, planId) {
       return this._fetch("POST", "/api/optimize-db/restore-chores", { instance, password, plan_id: planId });
     },
@@ -3471,6 +3472,11 @@ const OptimusPy = (function () {
     failed: "Failed",
   };
 
+  const OPTDB_CUBE_BADGES = {
+    pending: "badge-neutral", in_flight: "badge-info", done: "badge-success",
+    reverted: "badge-warning", skipped: "badge-neutral", failed: "badge-error",
+  };
+
   function optdbGb(bytes) {
     return ((bytes || 0) / 1073741824).toFixed(2) + " GB";
   }
@@ -3498,6 +3504,8 @@ const OptimusPy = (function () {
     _unsubStream: null,
     _timer: createElapsedTimer(),
     _jobStartedAt: null,
+    _planId: null,
+    _queuePoll: null,
 
     mount() {
       const page = $("#page-optimize-db");
@@ -3531,6 +3539,7 @@ const OptimusPy = (function () {
           if (!job || !page.classList.contains("active")) return;
           this._jobId = job.job_id;
           this._jobStartedAt = job.started_at;
+          this._planId = job.label;
           this._renderProgress($("#optdb-progress") || progressContainer);
         });
       }
@@ -3875,6 +3884,7 @@ const OptimusPy = (function () {
           const resp = await Api.optimizeDbRun(instance, Credentials.get(instance), planId);
           this._jobId = resp.job_id;
           this._jobStartedAt = resp.started_at;
+          this._planId = planId;
           StreamManager.connect(resp.job_id);
           this._renderProgress($("#optdb-progress"));
           Sidebar.updateActivityMonitor();
@@ -3898,10 +3908,48 @@ const OptimusPy = (function () {
       }
     },
 
-    _renderProgress(container) {
-      if (!container) return;
+    // Stop everything that follows the run on screen: the stream subscription, the
+    // timer and the queue poll. Called before the progress card is drawn again,
+    // when the run ends, and when the page is left.
+    _releaseProgress() {
       if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
       this._timer.stop();
+      if (this._queuePoll) { clearInterval(this._queuePoll); this._queuePoll = null; }
+    },
+
+    // One row per planned cube, in plan order, read from the run artifact the
+    // server rewrites after every cube.
+    _renderQueue(container, run) {
+      container.innerHTML = "";
+      const cubes = Object.entries(run.cubes || {});
+      const finished = cubes.filter(([, c]) => ["done", "reverted", "skipped", "failed"].includes(c.status)).length;
+      let budget = "";
+      if (run.deadline_at && !run.finished_at) {
+        const left = run.deadline_at - Date.now() / 1000;
+        budget = left > 0 ? ` · ${optdbDuration(left)} of the time limit left`
+          : " · time limit reached — stops after the cube in flight";
+      }
+      container.appendChild(el("div", { className: "text-sm text-secondary mb-2" },
+        `${finished} of ${cubes.length} cubes finished${budget}`));
+      container.appendChild(createTable({
+        columns: [
+          { key: "position", label: "#", align: "right" },
+          { key: "cube", label: "Cube" },
+          { key: "status", label: "Status", render: r => el("span",
+            { className: `badge ${OPTDB_CUBE_BADGES[r.status] || "badge-neutral"}` }, r.status.replace("_", " ")) },
+          { key: "pct_change", label: "RAM change", align: "right",
+            value: r => r.pct_change == null ? "—" : `${r.pct_change > 0 ? "+" : ""}${r.pct_change.toFixed(2)}%` },
+          { key: "duration_s", label: "Took", align: "right",
+            value: r => r.duration_s == null ? "—" : optdbDuration(r.duration_s) },
+        ],
+        data: cubes.map(([cube, c], i) => Object.assign({ position: i + 1, cube }, c)),
+        filterable: false,
+      }).el);
+    },
+
+    _renderProgress(container) {
+      if (!container) return;
+      this._releaseProgress();
       container.innerHTML = "";
       if (!this._jobId) return;
 
@@ -3931,6 +3979,15 @@ const OptimusPy = (function () {
       statusBar.appendChild(timerEl);
       statusBar.appendChild(stopBtn);
       card.appendChild(statusBar);
+      const queue = el("div", { className: "mb-4" });
+      card.appendChild(queue);
+      const refreshQueue = async () => {
+        if (!this._planId) return;
+        try {
+          this._renderQueue(queue, (await Api.optimizeDbRunState(this._planId)).run);
+        } catch { /* the run artifact exists once the run has started */ }
+      };
+      refreshQueue();
 
       const terminal = el("div", { className: "terminal" });
       card.appendChild(terminal);
@@ -3963,6 +4020,7 @@ const OptimusPy = (function () {
         stopBtn.style.display = "";
         this._timer.start(timerEl, this._jobStartedAt || Date.now() / 1000);
         StreamManager.connect(this._jobId);
+        this._queuePoll = setInterval(refreshQueue, 5000);
       } else if (sseStatus === "completed") {
         statusDot.classList.add("completed");
         statusText.textContent = "Finished";
@@ -3978,7 +4036,7 @@ const OptimusPy = (function () {
           return;
         }
         stopBtn.style.display = "none";
-        this._timer.stop();
+        this._releaseProgress(); refreshQueue();
         Sidebar.updateActivityMonitor();
         if (event === "complete") {
           const run = (data && data.run) || null;
@@ -4147,8 +4205,7 @@ const OptimusPy = (function () {
     },
 
     unmount() {
-      if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
-      this._timer.stop();
+      this._releaseProgress();
     },
   };
 

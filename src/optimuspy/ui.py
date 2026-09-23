@@ -346,6 +346,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/job/") and path.endswith("/stream"):
             job_id = path[len("/api/job/"):-len("/stream")]
             return self._handle_job_stream(job_id, parse_qs(url.query))
+        elif path.startswith("/api/optimize-db/run/"):
+            return self._handle_optimize_db_run_state(unquote(path[len("/api/optimize-db/run/"):]))
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -973,6 +975,15 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"runs": list_runs()})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
+
+    def _handle_optimize_db_run_state(self, plan_id: str):
+        if Path(plan_id).name != plan_id:
+            return self._send_json(400, {"error": "Malformed plan id"})
+        try:
+            _, run = find_run(plan_id)
+        except FileNotFoundError:
+            return self._send_json(404, {"error": f"No Optimize DB run for plan '{plan_id}'"})
+        self._send_json(200, {"run": run})
 
     def _handle_optimize_db_restore_chores(self, body: dict):
         instance = body.get("instance")

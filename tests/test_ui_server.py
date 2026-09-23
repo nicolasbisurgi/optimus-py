@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -551,3 +552,24 @@ def test_a_stream_event_never_carries_nan(ui_server, monkeypatch):
     final = read_stream(f"{base}/api/job/{job.job_id}/stream")[-1]
     assert final[1] == "complete"
     assert final[2]["run"]["pct_change"] is None
+
+
+def test_the_run_state_is_read_back_in_plan_order(ui_server, tmp_path):
+    base, _ = ui_server(PLAN_INI)
+    cubes = {"Small": {"status": "done", "pct_change": -12.5},
+             "Middle": {"status": "in_flight", "pct_change": None},
+             "Large": {"status": "pending", "pct_change": None}}
+    _write_json(_run_file(tmp_path), {"plan_id": PLAN_ID, "instance": "Planning Prod",
+                                      "status": "running", "cubes": cubes})
+    status, _, text = request("GET", f"{base}/api/optimize-db/run/{urllib.parse.quote(PLAN_ID)}")
+    run = json.loads(text)["run"]
+    assert status == 200
+    assert list(run["cubes"]) == ["Small", "Middle", "Large"]
+    assert run["cubes"]["Small"]["pct_change"] == -12.5
+
+
+@pytest.mark.parametrize("plan_id,expected", [(urllib.parse.quote(PLAN_ID), 404), ("..%2F..%2Fsecret", 400)])
+def test_the_run_state_of_an_unknown_or_malformed_id(ui_server, plan_id, expected):
+    base, _ = ui_server(PLAN_INI)
+    status, _, _ = request("GET", f"{base}/api/optimize-db/run/{plan_id}")
+    assert status == expected
