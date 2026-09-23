@@ -566,9 +566,13 @@ const OptimusPy = (function () {
     function doSort() {
       if (!_sortCol) return;
       const col = columns.find(c => c.key === _sortCol);
+      // Sort by the underlying value: a column's value() is formatted for display
+      // ("10,000", "1.2 GB", a locale date) and does not order correctly as text.
+      const sortKey = row => col.sortValue ? col.sortValue(row)
+        : (col.key in row ? row[col.key] : (col.value ? col.value(row) : undefined));
       _filtered.sort((a, b) => {
-        let va = col.sortValue ? col.sortValue(a) : (col.value ? col.value(a) : a[col.key]);
-        let vb = col.sortValue ? col.sortValue(b) : (col.value ? col.value(b) : b[col.key]);
+        let va = sortKey(a);
+        let vb = sortKey(b);
         if (va == null) va = "";
         if (vb == null) vb = "";
         let cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
