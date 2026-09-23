@@ -10,6 +10,7 @@ Usage:
 import argparse
 import json
 import logging
+import math
 import re
 import sys
 import threading
@@ -21,12 +22,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from TM1py import TM1Service
-
 from optimuspy.cli import tm1_connector
 from optimuspy.core import (
     get_tm1_config, validate_cube_config,
-    main as run_optimuspy, _scan_to_data_light, APP_NAME, get_logfile_path, RESULT_PATH,
+    main as run_optimuspy, _scan_to_data_light, get_logfile_path, RESULT_PATH,
     set_current_directory, _collect_dimension_metadata, _compute_suggested_order,
     resolve_config_path
 )
@@ -46,6 +45,21 @@ SECRET_KEYS = frozenset({
     "password", "api_key", "application_client_secret", "cam_passport", "access_token",
 })
 
+
+def _browser_json(data) -> bytes:
+    """JSON for the page. A value that could not be measured is NaN in Python and
+    in the run artifact, but JSON.parse rejects NaN, so the page receives null."""
+    def clean(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [clean(item) for item in value]
+        return value
+    return json.dumps(clean(data)).encode("utf-8")
+
+
 # Global state
 _config_ini_path = DEFAULT_CONFIG_INI
 _config_read_only = False
@@ -57,13 +71,8 @@ def _resolve_static_dir() -> Path:
 
 
 def _create_tm1_connection(instance_name: str, password: str = None):
-    config = get_tm1_config(_config_ini_path)
-    tm1_args = dict(config[instance_name])
-    tm1_args['session_context'] = APP_NAME
-    if password:
-        tm1_args['password'] = password
-        tm1_args['decode_b64'] = False
-    return TM1Service(**tm1_args)
+    """A logged-in TM1 service for one request, built exactly as the CLI builds it."""
+    return tm1_connector(_config_ini_path, instance_name, password)()
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +295,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         return True
 
     def _send_json(self, status: int, data: dict):
-        body = json.dumps(data).encode("utf-8")
+        body = _browser_json(data)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -707,7 +716,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         if configs_dir.exists():
             for f in sorted(configs_dir.glob("*.json")):
                 try:
-                    data = json.loads(f.read_text())
+                    data = json.loads(f.read_text(encoding="utf-8"))
                     configs.append({
                         "filename": f.name,
                         "cube": data.get("cube", ""),
@@ -779,7 +788,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                 for event in events:
                     cursor += 1
                     self.wfile.write(f"id: {cursor}\nevent: {event['event']}\n"
-                                     f"data: {json.dumps(event['data'])}\n\n".encode())
+                                     f"data: {_browser_json(event['data']).decode()}\n\n".encode())
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return

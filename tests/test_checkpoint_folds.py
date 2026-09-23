@@ -33,7 +33,7 @@ def test_fingerprint_stable_for_same_inputs():
 
 
 # ---------------------------------------------------------------------------
-# Task 12 — checkpoint resume round-trips for Fold A and Fold B
+# Checkpoint resume round-trips for Fold A and Fold B
 #
 # A genuine round-trip: run a fold to completion (reference), then run it again
 # but crash mid-fold via OptimizationCancelled, capture the checkpointed

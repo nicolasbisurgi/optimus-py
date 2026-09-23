@@ -1,10 +1,10 @@
-"""`dimension_position_rules`, completed: pre-application and startup validation.
+"""`dimension_position_rules`: pre-application and startup validation.
 
-Two documented behaviours did not exist. Pre-application — seat the named
-dimensions and search what is left — is implemented *in the frame*, so a pinned
-dimension is simply another immovable one alongside the locked and the excluded
-dims; there is no second list anywhere. Validation turns every case Task 5a
-deferred into the error the documentation promises.
+Pre-application — seat the named dimensions and search what is left — is
+implemented *in the frame*, so a pinned dimension is simply another immovable
+one alongside the locked and the excluded dims; there is no second list
+anywhere. Validation turns every invalid rule into the error the documentation
+promises.
 
 Offline, no fake.
 """

@@ -508,3 +508,46 @@ def test_a_plan_id_names_exactly_one_plan(ui_server, monkeypatch, tmp_path, body
     status, _, _, seen = _run_plan(base, monkeypatch, body)
     assert status == expected
     assert seen == {}
+
+
+# --- hygiene -------------------------------------------------------------------
+
+def test_an_unknown_instance_is_named_in_the_error(ui_server):
+    base, _ = ui_server(INI)
+    status, _, text = request("POST", f"{base}/api/connect", body={"instance": "prod2"})
+    assert status == 502
+    assert "Instance 'prod2' not found" in json.loads(text)["error"]
+
+
+def test_a_saved_config_is_read_as_utf8(ui_server, tmp_path):
+    # Pins Windows behaviour: on a UTF-8 host this passes with or without the
+    # explicit encoding, so it guards against the encoding being dropped again.
+    base, _ = ui_server(INI)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "ventas.json").write_bytes(
+        json.dumps({"cube": "Ventas €", "instance": "prod"}, ensure_ascii=False).encode("utf-8"))
+    status, _, text = request("GET", f"{base}/api/saved-cubes")
+    assert status == 200
+    assert [c["cube"] for c in json.loads(text)["saved_cubes"]] == ["Ventas €"]
+
+
+def test_a_response_never_carries_nan(ui_server, tmp_path):
+    base, _ = ui_server(INI)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "odd.json").write_text(
+        '{"cube": "Sales", "instance": "prod", "executions": NaN}', encoding="utf-8")
+    _, _, text = request("GET", f"{base}/api/saved-cubes")
+    assert "NaN" not in text
+    assert json.loads(text)["saved_cubes"][0]["executions"] is None
+
+
+def test_a_stream_event_never_carries_nan(ui_server, monkeypatch):
+    base, _ = ui_server(INI)
+    jobs = ui.JobManager()
+    monkeypatch.setattr(ui, "job_manager", jobs)
+    job = jobs.get(jobs.start("optimize-db", "plan", "prod",
+                              lambda job: ("completed", {"run": {"pct_change": float("nan")}})))
+    wait_done(job)
+    final = read_stream(f"{base}/api/job/{job.job_id}/stream")[-1]
+    assert final[1] == "complete"
+    assert final[2]["run"]["pct_change"] is None
