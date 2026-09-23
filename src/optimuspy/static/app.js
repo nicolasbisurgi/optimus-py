@@ -1,8 +1,7 @@
 /* ============================================================
    OptimusPy Dashboard — app.js
    Single IIFE module: API, Router, Toast, Modal, Theme, Table,
-   TransferList, DimensionConfigurator, StreamManager, Sidebar,
-   BatchManager, and 6 page modules.
+   DimensionConfigurator, StreamManager, Sidebar and the page modules.
    ============================================================ */
 
 const OptimusPy = (function () {
@@ -206,11 +205,9 @@ const OptimusPy = (function () {
     startJob(mode, cubeConfig, password) {
       return this._fetch("POST", "/api/job/start", { mode, cube_config: cubeConfig, password });
     },
-    getJob(id) { return this._fetch("GET", `/api/job/${id}`); },
     cancelJob(id) { return this._fetch("POST", `/api/job/${id}/cancel`); },
     getJobs() { return this._fetch("GET", "/api/jobs"); },
     getResults() { return this._fetch("GET", "/api/results"); },
-    getStatus() { return this._fetch("GET", "/api/status"); },
     createInstance(name, params) { return this._fetch("POST", "/api/instances", { name, params }); },
     deleteInstance(name) { return this._fetch("DELETE", `/api/instance/${encodeURIComponent(name)}`); },
     deleteInstanceField(name, key) { return this._fetch("DELETE", `/api/instance/${encodeURIComponent(name)}/field/${encodeURIComponent(key)}`); },
@@ -523,152 +520,6 @@ const OptimusPy = (function () {
       },
       getData() { return _filtered; },
       destroy() { wrapper.remove(); },
-    };
-  }
-
-  // ==================================================================
-  // TransferList factory
-  // ==================================================================
-  function createTransferList({ available, selected, labelKey = "name", searchable = true, onChange }) {
-    let _avail = available.filter(a => !selected.includes(a));
-    let _sel = [...selected];
-    let _availFilter = "";
-    let _selFilter = "";
-    let _availSelected = new Set();
-    let _selSelected = new Set();
-
-    const container = el("div", { className: "transfer-list" });
-
-    function filteredAvail() {
-      return _availFilter ? _avail.filter(i => i.toLowerCase().includes(_availFilter)) : _avail;
-    }
-    function filteredSel() {
-      return _selFilter ? _sel.filter(i => i.toLowerCase().includes(_selFilter)) : _sel;
-    }
-
-    function render() {
-      container.innerHTML = "";
-
-      // Left pane
-      const leftPane = el("div", { className: "transfer-pane" });
-      leftPane.appendChild(el("div", { className: "transfer-pane-header" },
-        el("span", null, "Available"),
-        el("span", { className: "transfer-pane-count" }, `${_avail.length}`),
-      ));
-      if (searchable) {
-        const sw = el("div", { className: "transfer-search" });
-        const si = el("input", { type: "text", placeholder: "Filter..." });
-        si.value = _availFilter;
-        si.addEventListener("input", () => { _availFilter = si.value.toLowerCase(); render(); });
-        sw.appendChild(si);
-        leftPane.appendChild(sw);
-      }
-      const leftItems = el("div", { className: "transfer-items" });
-      const fa = filteredAvail();
-      if (fa.length === 0) {
-        leftItems.appendChild(el("div", { className: "transfer-item-empty" }, _avail.length === 0 ? "None available" : "No matches"));
-      } else {
-        fa.forEach(item => {
-          const d = el("div", {
-            className: `transfer-item${_availSelected.has(item) ? " selected" : ""}`,
-            onClick: () => { toggleSet(_availSelected, item); render(); }
-          }, item);
-          leftItems.appendChild(d);
-        });
-      }
-      leftPane.appendChild(leftItems);
-
-      // Center arrows
-      const actions = el("div", { className: "transfer-actions" });
-      const addBtn = el("button", { className: "transfer-btn", title: "Add selected", "aria-label": "Add selected", html: Icons.chevronRight, onClick: moveRight });
-      const removeBtn = el("button", { className: "transfer-btn", title: "Remove selected", "aria-label": "Remove selected", html: Icons.chevronLeft, onClick: moveLeft });
-      actions.appendChild(addBtn);
-      actions.appendChild(removeBtn);
-
-      // Right pane
-      const rightPane = el("div", { className: "transfer-pane" });
-      rightPane.appendChild(el("div", { className: "transfer-pane-header" },
-        el("span", null, "Selected"),
-        el("span", { className: "transfer-pane-count" }, `${_sel.length}`),
-      ));
-      if (searchable) {
-        const sw = el("div", { className: "transfer-search" });
-        const si = el("input", { type: "text", placeholder: "Filter..." });
-        si.value = _selFilter;
-        si.addEventListener("input", () => { _selFilter = si.value.toLowerCase(); render(); });
-        sw.appendChild(si);
-        rightPane.appendChild(sw);
-      }
-      const rightItems = el("div", { className: "transfer-items" });
-      const fs = filteredSel();
-      if (fs.length === 0) {
-        rightItems.appendChild(el("div", { className: "transfer-item-empty" }, _sel.length === 0 ? "None selected" : "No matches"));
-      } else {
-        fs.forEach(item => {
-          const d = el("div", {
-            className: `transfer-item${_selSelected.has(item) ? " selected" : ""}`,
-            onClick: () => { toggleSet(_selSelected, item); render(); }
-          }, item);
-          rightItems.appendChild(d);
-        });
-      }
-      rightPane.appendChild(rightItems);
-
-      container.appendChild(leftPane);
-      container.appendChild(actions);
-      container.appendChild(rightPane);
-    }
-
-    function toggleSet(set, item) {
-      if (set.has(item)) set.delete(item); else set.add(item);
-    }
-
-    function moveRight() {
-      if (_availSelected.size === 0) return;
-      _availSelected.forEach(item => {
-        _avail = _avail.filter(a => a !== item);
-        _sel.push(item);
-      });
-      _availSelected.clear();
-      if (onChange) onChange(_sel);
-      render();
-    }
-
-    function moveLeft() {
-      if (_selSelected.size === 0) return;
-      _selSelected.forEach(item => {
-        _sel = _sel.filter(s => s !== item);
-        _avail.push(item);
-        _avail.sort();
-      });
-      _selSelected.clear();
-      if (onChange) onChange(_sel);
-      render();
-    }
-
-    render();
-
-    return {
-      el: container,
-      getSelected() { return [..._sel]; },
-      setItems(avail, sel) {
-        _sel = [...sel];
-        _avail = avail.filter(a => !_sel.includes(a));
-        _availSelected.clear();
-        _selSelected.clear();
-        render();
-      },
-      reset() {
-        _avail = [...available];
-        _sel = [];
-        _availFilter = "";
-        _selFilter = "";
-        _availSelected.clear();
-        _selSelected.clear();
-        render();
-        if (onChange) onChange();
-      },
-      destroy() { container.remove(); },
     };
   }
 
@@ -1266,43 +1117,6 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
-  // BatchManager — sequential multi-cube optimization
-  // ==================================================================
-  const BatchManager = {
-    _queue: [],
-    _running: false,
-
-    enqueue(configs) {
-      // configs: [{ mode, cubeConfig, password }]
-      this._queue.push(...configs);
-      if (!this._running) this._processNext();
-    },
-
-    async _processNext() {
-      if (this._queue.length === 0) { this._running = false; return; }
-      this._running = true;
-      const item = this._queue.shift();
-      try {
-        const resp = await Api.startJob(item.mode, item.cubeConfig, item.password);
-        StreamManager.connect(resp.job_id);
-        // Wait for completion before processing next
-        const unsub = StreamManager.subscribe(resp.job_id, (event) => {
-          if (event === "complete" || event === "error_event" || event === "cancelled") {
-            unsub();
-            Sidebar.updateActivityMonitor();
-            this._processNext();
-          }
-        });
-        Toast.info(`Started optimization for ${item.cubeConfig.cube}`);
-        Sidebar.updateActivityMonitor();
-      } catch (err) {
-        Toast.error(`Failed to start job for ${item.cubeConfig.cube}: ${err.message}`);
-        this._processNext();
-      }
-    },
-  };
-
-  // ==================================================================
   // Sidebar
   // ==================================================================
   const Sidebar = {
@@ -1673,176 +1487,6 @@ const OptimusPy = (function () {
       page.appendChild(this._buildCollapsibleHelp());
     },
 
-    // ---- Connected: auto-scan cube cards ----
-    _renderConnected(page) {
-      // Header with instance info + rescan
-      const header = el("div", { className: "page-header", style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px" });
-      header.appendChild(el("div", null,
-        el("h1", { className: "page-title" }, state.serverName || state.activeInstance),
-        el("p", { className: "page-subtitle" }, `${state.activeInstance} — ${state.savedCubes.length} saved cube${state.savedCubes.length !== 1 ? "s" : ""}`),
-      ));
-      const headerActions = el("div", { className: "flex gap-2 items-center" });
-      const helpBtn = el("button", {
-        className: "btn btn-ghost btn-sm",
-        "aria-label": "Tips & help",
-        onClick: () => this._showHelpDrawer(),
-      }, el("span", { html: Icons.info }), "Help");
-      headerActions.appendChild(helpBtn);
-      header.appendChild(headerActions);
-      page.appendChild(header);
-
-      // Filter bar
-      const filterBar = el("div", { className: "cube-filter-bar" });
-      // RAM threshold slider
-      const ramGroup = el("div", { className: "cube-filter-group" });
-      ramGroup.appendChild(el("label", { className: "cube-filter-label" }, "RAM Threshold"));
-      const ramRow = el("div", { className: "flex items-center gap-2" });
-      const ramSlider = el("input", { type: "range", min: "0", max: "100", value: String(this._ramThreshold), style: "width:120px" });
-      const ramValue = el("span", { className: "cube-filter-value" }, this._ramThreshold + "%");
-      ramSlider.addEventListener("input", () => {
-        this._ramThreshold = parseInt(ramSlider.value);
-        ramValue.textContent = this._ramThreshold + "%";
-      });
-      // Don't auto-scan on slider change — user clicks Rescan when ready
-      ramRow.appendChild(ramSlider);
-      ramRow.appendChild(ramValue);
-      ramGroup.appendChild(ramRow);
-      filterBar.appendChild(ramGroup);
-      // Include optimized toggle
-      const optLabel = el("label", { className: "cube-filter-group checkbox-label", style: "cursor:pointer" });
-      const optCb = el("input", { type: "checkbox" });
-      optCb.checked = this._includeOptimized;
-      optCb.addEventListener("change", () => { this._includeOptimized = optCb.checked; });
-      optLabel.appendChild(optCb);
-      optLabel.appendChild(document.createTextNode(" Include optimized"));
-      filterBar.appendChild(optLabel);
-      // Rescan button
-      const rescanBtn = el("button", { className: "btn btn-ghost btn-sm", id: "home-rescan-btn", onClick: () => this._rescan(page) },
-        el("span", { html: Icons.refresh }), "Rescan");
-      filterBar.appendChild(rescanBtn);
-      page.appendChild(filterBar);
-
-      // Cubes container
-      const cubesContainer = el("div", { id: "home-cubes-container" });
-      page.appendChild(cubesContainer);
-
-      // Auto-scan if no data yet, otherwise render existing
-      if (state.scanData) {
-        this._renderCubeCards(cubesContainer);
-      } else {
-        this._autoScan(cubesContainer);
-      }
-    },
-
-    async _autoScan(container) {
-      this._showScanLoading(container);
-      try {
-        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
-        state.scanData = data;
-        Sidebar.renderScannedCubes();
-        container.innerHTML = "";
-        this._renderCubeCards(container);
-      } catch (err) {
-        container.innerHTML = "";
-        container.appendChild(el("div", { className: "empty-state" },
-          el("div", { className: "empty-state-title" }, "Scan failed"),
-          el("div", { className: "empty-state-text" }, err.message),
-          el("div", { className: "empty-state-action" },
-            el("button", { className: "btn btn-primary", onClick: () => this._autoScan(container) }, "Retry")),
-        ));
-      }
-    },
-
-    async _rescan(page) {
-      const container = page.querySelector("#home-cubes-container") || $("#home-cubes-container");
-      if (!container) return;
-      const btn = page.querySelector("#home-rescan-btn") || $("#home-rescan-btn");
-      if (btn) { btn.disabled = true; }
-      this._showScanLoading(container);
-      try {
-        const data = await Api.scan(state.activeInstance, state.password, this._ramThreshold, this._includeOptimized);
-        state.scanData = data;
-        Sidebar.renderScannedCubes();
-        container.innerHTML = "";
-        this._renderCubeCards(container);
-        Toast.success(`Found ${data.candidates?.length || 0} cubes`);
-      } catch (err) {
-        container.innerHTML = "";
-        container.appendChild(el("div", { className: "empty-state" },
-          el("div", { className: "empty-state-title" }, "Scan failed"),
-          el("div", { className: "empty-state-text" }, err.message),
-        ));
-        Toast.error("Scan failed: " + err.message);
-      } finally {
-        if (btn) { btn.disabled = false; }
-      }
-    },
-
-    _showScanLoading(container) {
-      container.innerHTML = "";
-      const loading = el("div", { className: "cube-cards-loading" });
-      loading.appendChild(el("div", { className: "flex items-center gap-3 mb-4" },
-        el("div", { className: "activity-spinner", style: "width:16px;height:16px;border-width:2px" }),
-        el("span", { className: "text-sm text-secondary" }, "Scanning instance — fetching cube RAM data and dimension metadata..."),
-      ));
-      // Skeleton cards
-      for (let i = 0; i < 6; i++) {
-        loading.appendChild(el("div", { className: "cube-card-skeleton" }));
-      }
-      container.appendChild(loading);
-    },
-
-    _renderCubeCards(container) {
-      const cubes = state.scanData?.candidates || [];
-      if (cubes.length === 0) {
-        container.appendChild(el("div", { className: "empty-state" },
-          el("div", { className: "empty-state-title" }, "No cubes found"),
-          el("div", { className: "empty-state-text" }, "Try lowering the RAM threshold or enabling 'Include optimized'."),
-        ));
-        return;
-      }
-
-      // Summary line
-      const totalRam = cubes.reduce((sum, c) => sum + (c.ram_gb || 0), 0);
-      container.appendChild(el("div", { className: "cube-cards-summary" },
-        `${cubes.length} cube${cubes.length !== 1 ? "s" : ""} — ${totalRam.toFixed(2)} GB total RAM`
-      ));
-
-      const grid = el("div", { className: "cube-cards-grid" });
-      const maxRam = Math.max(...cubes.map(c => c.ram_gb || 0), 0.01);
-      cubes.forEach(c => {
-        const card = el("button", {
-          className: "cube-card",
-          onClick: () => Router.navigate(`#/cube/${encodeURIComponent(c.cube_name)}`),
-        });
-        // Top row: name + badges
-        const top = el("div", { className: "cube-card-top" });
-        top.appendChild(el("span", { className: "cube-card-name" }, c.cube_name));
-        const badges = el("span", { className: "cube-card-badges" });
-        if (c.already_optimized) badges.appendChild(el("span", { className: "badge badge-success" }, "optimized"));
-        if (c.last_dim_has_strings) badges.appendChild(el("span", { className: "badge badge-warning" }, "strings"));
-        top.appendChild(badges);
-        card.appendChild(top);
-        // RAM bar
-        const barWrap = el("div", { className: "cube-card-bar-wrap" });
-        const barFill = el("div", { className: "cube-card-bar-fill" });
-        const pct = Math.max((c.ram_gb || 0) / maxRam * 100, 2);
-        barFill.style.width = pct + "%";
-        // Color: green < 33%, amber 33-66%, red > 66% of max
-        barFill.classList.add(pct > 66 ? "high" : pct > 33 ? "mid" : "low");
-        barWrap.appendChild(barFill);
-        card.appendChild(barWrap);
-        // Bottom row: stats
-        const bottom = el("div", { className: "cube-card-stats" });
-        bottom.appendChild(el("span", null, `${(c.ram_gb || 0).toFixed(2)} GB`));
-        bottom.appendChild(el("span", null, `${(c.pct_of_total || 0).toFixed(1)}% of model`));
-        bottom.appendChild(el("span", null, `${c.dim_count || 0} dims`));
-        card.appendChild(bottom);
-        grid.appendChild(card);
-      });
-      container.appendChild(grid);
-    },
-
     // ---- Help: show tips in a modal instead of inline ----
     _showHelpDrawer() {
       Modal.open({
@@ -1880,7 +1524,7 @@ const OptimusPy = (function () {
 
       const steps = [
         { n: "1", title: "Connect", desc: "Select a TM1 instance from the sidebar and enter your password if needed." },
-        { n: "2", title: "Scan", desc: "Go to Cubes and scan the instance. OptimusPy identifies cubes that may benefit from reordering based on RAM usage." },
+        { n: "2", title: "Scan", desc: "The cube list on the left scans the instance and ranks cubes by RAM. Use the RAM threshold and Rescan to change what it shows." },
         { n: "3", title: "Configure", desc: "Select a cube, choose an optimization mode (Greedy, Predefined, Position, or Dimension), pick views to benchmark, and set the number of executions per permutation." },
         { n: "4", title: "Optimize", desc: "Start the optimization. OptimusPy will test dimension orderings, measuring RAM and query time for each. You can stop the process at any time." },
         { n: "5", title: "Review", desc: "Check the Results tab for CSV/HTML reports showing all tested permutations and the recommended order." },
@@ -2347,170 +1991,12 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
-  // Page: Cubes (scan + table) — legacy, kept for direct URL access
-  // ==================================================================
-  const CubesPage = {
-    _table: null,
-
-    mount() {
-      const page = $("#page-cubes");
-      page.innerHTML = "";
-
-      page.appendChild(el("div", { className: "page-header" },
-        el("h1", { className: "page-title" }, "Cubes"),
-        el("p", { className: "page-subtitle" }, "Scan your TM1 instance and explore cube dimensions"),
-      ));
-
-      if (!state.connected) {
-        page.appendChild(el("div", { className: "empty-state" },
-          el("div", { className: "empty-state-title" }, "Not connected"),
-          el("div", { className: "empty-state-text" }, "Connect to a TM1 instance first."),
-          el("div", { className: "empty-state-action" },
-            el("button", { className: "btn btn-primary", onClick: () => Router.navigate("#/home") }, "Go to Home")),
-        ));
-        return;
-      }
-
-      // Scan controls
-      const controls = el("div", { className: "card mb-4" });
-      const controlsInner = el("div", { className: "flex items-center gap-4", style: "flex-wrap:wrap" });
-
-      // RAM threshold
-      const ramGroup = el("div", { className: "form-group", style: "margin-bottom:0;flex:1;min-width:200px" });
-      ramGroup.appendChild(el("label", { className: "form-label" }, "RAM Threshold %"));
-      const ramRow = el("div", { className: "flex items-center gap-2" });
-      const ramSlider = el("input", { type: "range", min: "0", max: "100", value: "60", style: "flex:1" });
-      const ramValue = el("span", { className: "text-sm font-medium", style: "width:36px;text-align:right" }, "60%");
-      ramSlider.addEventListener("input", () => { ramValue.textContent = ramSlider.value + "%"; });
-      ramRow.appendChild(ramSlider);
-      ramRow.appendChild(ramValue);
-      ramGroup.appendChild(ramRow);
-      controlsInner.appendChild(ramGroup);
-
-      // Include optimized
-      const optLabel = el("label", { className: "checkbox-label" });
-      const optCb = el("input", { type: "checkbox" });
-      optLabel.appendChild(optCb);
-      optLabel.appendChild(document.createTextNode("Include optimized"));
-      controlsInner.appendChild(optLabel);
-
-      // Scan button
-      const scanBtn = el("button", { className: "btn btn-primary" },
-        el("span", { html: Icons.search }), "Scan");
-      scanBtn.addEventListener("click", async () => {
-        scanBtn.disabled = true;
-        scanBtn.innerHTML = Icons.refresh + " Scanning...";
-        // Show loading skeleton while scan runs
-        const existingTable = page.querySelector(".table-wrapper");
-        if (existingTable) existingTable.remove();
-        const existingEmpty = page.querySelector(".empty-state");
-        if (existingEmpty) existingEmpty.remove();
-        const loadingEl = el("div", { className: "card", id: "scan-loading" });
-        loadingEl.appendChild(el("div", { className: "flex items-center gap-3 mb-4" },
-          el("div", { className: "status-dot running", style: "width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.5s ease-in-out infinite" }),
-          el("span", { className: "text-sm font-medium" }, "Scanning instance — fetching RAM data, dimension metadata, and storage orders..."),
-        ));
-        for (let i = 0; i < 5; i++) {
-          loadingEl.appendChild(el("div", { className: "skeleton skeleton-text", style: `width:${80 - i * 10}%;margin-bottom:8px` }));
-        }
-        page.appendChild(loadingEl);
-        try {
-          const data = await Api.scan(state.activeInstance, state.password, parseInt(ramSlider.value), optCb.checked);
-          state.scanData = data;
-          const lEl = page.querySelector("#scan-loading");
-          if (lEl) lEl.remove();
-          this._renderTable(page);
-          Sidebar.renderScannedCubes();
-          Toast.success(`Found ${data.candidates?.length || 0} cubes`);
-        } catch (err) {
-          const lEl = page.querySelector("#scan-loading");
-          if (lEl) lEl.remove();
-          Toast.error("Scan failed: " + err.message);
-        } finally {
-          scanBtn.disabled = false;
-          scanBtn.innerHTML = Icons.search + " Scan";
-        }
-      });
-      controlsInner.appendChild(scanBtn);
-
-      controls.appendChild(controlsInner);
-      page.appendChild(controls);
-
-      // Table placeholder
-      if (state.scanData) {
-        this._renderTable(page);
-      } else {
-        page.appendChild(el("div", { className: "empty-state" },
-          el("div", { className: "empty-state-title" }, "No scan data"),
-          el("div", { className: "empty-state-text" }, "Click Scan to discover cubes in your TM1 instance."),
-        ));
-      }
-    },
-
-    _renderTable(page) {
-      // Remove old table
-      const existing = page.querySelector(".table-wrapper");
-      if (existing) existing.remove();
-      const existingEmpty = page.querySelector(".empty-state");
-      if (existingEmpty) existingEmpty.remove();
-
-      const cubes = state.scanData?.candidates || [];
-
-      this._table = createTable({
-        columns: [
-          { key: "index", label: "#", sortable: false, render: (_, i) => i + 1, align: "right" },
-          { key: "cube_name", label: "Cube Name", render: r => {
-            const wrap = el("span", { className: "flex items-center gap-2" });
-            wrap.appendChild(el("span", { className: "font-medium" }, r.cube_name));
-            if (r.already_optimized) wrap.appendChild(el("span", { className: "badge badge-success" }, "optimized"));
-            return wrap;
-          }},
-          { key: "dim_count", label: "Dims", align: "right", value: r => r.dim_count || 0 },
-          { key: "dims_detail", label: "Dimensions", sortable: false, render: r => {
-            const dims = r.dimension_order || [];
-            if (dims.length === 0) return "—";
-            const wrap = el("div", { className: "flex gap-1", style: "flex-wrap:wrap" });
-            dims.forEach(name => {
-              wrap.appendChild(el("span", { className: "badge badge-neutral", style: "font-size:10px" }, name));
-            });
-            if (r.last_dim_has_strings) {
-              wrap.appendChild(el("span", {
-                className: "badge badge-neutral",
-                style: "font-size:10px;border-left:2px solid var(--warning);color:var(--warning)",
-                html: Icons.alertTriangle + " strings in last dim"
-              }));
-            }
-            return wrap;
-          }},
-          { key: "ram_gb", label: "RAM (GB)", align: "right", sortValue: r => r.ram_gb || 0,
-            render: r => r.ram_gb != null ? r.ram_gb.toFixed(2) : "—" },
-          { key: "pct_of_total", label: "% of Total", align: "right", sortValue: r => r.pct_of_total || 0,
-            render: r => r.pct_of_total != null ? r.pct_of_total.toFixed(1) + "%" : "—" },
-        ],
-        data: cubes,
-        onRowClick: (row) => {
-          Router.navigate(`#/cube/${encodeURIComponent(row.cube_name)}`);
-        },
-        emptyMessage: "No cubes found",
-      });
-
-      page.appendChild(this._table.el);
-    },
-
-    unmount() {
-      if (this._table) { this._table.destroy(); this._table = null; }
-    },
-  };
-
-  // ==================================================================
   // Page: CubeWorkspace (4 tabs: Overview, Configure, Optimize, Results)
   // ==================================================================
   const CubeWorkspace = {
     _cubeName: null,
     _activeTab: "overview",
     _dimConfigurator: null,
-    _viewsTransfer: null,
-    _processesTransfer: null,
     _jobId: null,
     _unsubStream: null,
     _timer: null,
@@ -2518,104 +2004,6 @@ const OptimusPy = (function () {
     _tabCache: {},     // tab name → DOM container (cached rendered tabs)
     _tabsEl: null,     // tabs bar element
     _contentEl: null,  // tab content wrapper
-
-    mount(params, query) {
-      const newCube = params.cubeName;
-      const newTab = query.tab || "overview";
-
-      // If same cube: just switch tab (don't re-render page chrome)
-      if (this._cubeName === newCube && this._contentEl) {
-        this._switchTab(newTab);
-        return;
-      }
-
-      // Different cube or first mount: full render
-      this._cubeName = newCube;
-      this._activeTab = newTab;
-      this._tabCache = {};
-
-      const page = $("#page-cube-workspace");
-      page.innerHTML = "";
-
-      // Breadcrumb
-      page.appendChild(el("div", { className: "breadcrumb" },
-        el("a", { href: "#/cubes" }, "Cubes"),
-        el("span", { className: "separator" }, "/"),
-        el("span", { className: "current" }, this._cubeName),
-      ));
-
-      page.appendChild(el("h1", { className: "page-title mb-4" }, this._cubeName));
-
-      // Tabs bar
-      this._tabsEl = el("div", { className: "tabs", role: "tablist", "aria-label": "Cube workspace tabs" });
-      const tabNames = ["overview", "configure", "optimize", "results"];
-      tabNames.forEach((t, idx) => {
-        const label = t.charAt(0).toUpperCase() + t.slice(1);
-        const isActive = t === this._activeTab;
-        const tab = el("button", {
-          className: `tab${isActive ? " active" : ""}`,
-          role: "tab",
-          "aria-selected": isActive ? "true" : "false",
-          tabindex: isActive ? "0" : "-1",
-          id: `tab-${t}`,
-          "aria-controls": `tabpanel-${t}`,
-          dataset: { tab: t },
-          onClick: () => {
-            this._switchTab(t);
-            history.replaceState(null, "", `#/cube/${encodeURIComponent(this._cubeName)}?tab=${t}`);
-          },
-          onKeydown: (e) => {
-            let newIdx = idx;
-            if (e.key === "ArrowRight") newIdx = (idx + 1) % tabNames.length;
-            else if (e.key === "ArrowLeft") newIdx = (idx - 1 + tabNames.length) % tabNames.length;
-            else if (e.key === "Home") newIdx = 0;
-            else if (e.key === "End") newIdx = tabNames.length - 1;
-            else return;
-            e.preventDefault();
-            const target = this._tabsEl.querySelector(`[data-tab="${tabNames[newIdx]}"]`);
-            if (target) { target.click(); target.focus(); }
-          },
-        }, label);
-        this._tabsEl.appendChild(tab);
-      });
-      page.appendChild(this._tabsEl);
-
-      // Tab content container
-      this._contentEl = el("div", { id: "cube-tab-content" });
-      page.appendChild(this._contentEl);
-
-      // Render initial tab
-      this._renderTab(this._activeTab);
-    },
-
-    _switchTab(tabName) {
-      if (tabName === this._activeTab && this._tabCache[tabName]) return;
-      this._activeTab = tabName;
-
-      // Update tab bar active + ARIA states
-      if (this._tabsEl) {
-        this._tabsEl.querySelectorAll(".tab").forEach(t => {
-          const isActive = t.dataset.tab === tabName;
-          t.classList.toggle("active", isActive);
-          t.setAttribute("aria-selected", String(isActive));
-          t.setAttribute("tabindex", isActive ? "0" : "-1");
-        });
-      }
-
-      // Hide all cached tabs
-      Object.values(this._tabCache).forEach(c => { c.style.display = "none"; });
-
-      // Show cached tab or render new one
-      if (this._tabCache[tabName]) {
-        this._tabCache[tabName].style.display = "";
-        // Re-trigger optimize tab refresh when switching to it
-        if (tabName === "optimize") this._refreshOptimize();
-      } else {
-        this._renderTab(tabName);
-      }
-
-      document.title = `OptimusPy — ${this._cubeName}`;
-    },
 
     _renderTab(tabName) {
       const container = el("div", { className: "tab-pane", role: "tabpanel", id: `tabpanel-${tabName}`, "aria-labelledby": `tab-${tabName}`, dataset: { tabPane: tabName } });
@@ -3517,24 +2905,6 @@ const OptimusPy = (function () {
       }
       return state.cubeViews[this._cubeName];
     },
-
-    _refreshOptimize() {
-      // When switching back to optimize tab, scroll terminal to bottom
-      const terminal = this._tabCache.optimize?.querySelector("#optimize-terminal");
-      if (terminal) terminal.scrollTop = terminal.scrollHeight;
-    },
-
-    unmount() {
-      if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
-      this._stopTimer();
-      this._dimConfigurator = null;
-      this._viewsTransfer = null;
-      this._selectedProcesses = [];
-      this._updatePreview = null;
-      this._tabCache = {};
-      this._tabsEl = null;
-      this._contentEl = null;
-    },
   };
 
   // ==================================================================
@@ -3661,10 +3031,7 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
-  // Page: Settings
-  // ==================================================================
-  // ==================================================================
-  // TransferPage (placeholder — full implementation in Tasks 6+7)
+  // Page: Sync Order — copy storage orders from one instance to another
   // ==================================================================
   const TransferPage = {
     _sourceInstance: null,
@@ -3790,22 +3157,6 @@ const OptimusPy = (function () {
       });
     },
 
-    async _addToTarget(cubeNames) {
-      cubeNames.forEach(name => {
-        const cube = this._sourceCubes.find(c => c.cube_name === name);
-        if (cube && !this._transferredCubes[name]) {
-          this._transferredCubes[name] = {
-            proposed: cube.storage_order,
-            current: null,
-          };
-        }
-      });
-      if (this._targetConnected) {
-        await this._fetchTargetOrders(selected);
-      }
-      this.mount();
-    },
-
     _buildTargetPanel(panel) {
       const connRow = el("div", { className: "transfer-connect-row" });
       const instanceSelect = el("select", { className: "form-input", id: "transfer-target-instance" });
@@ -3860,7 +3211,7 @@ const OptimusPy = (function () {
       if (transferredNames.length === 0) {
         dropZone.appendChild(el("div", { className: "transfer-drop-placeholder" },
           el("span", { html: Icons.arrowRight, style: "opacity:0.3" }),
-          el("div", { className: "text-secondary text-sm mt-2" }, "Drag cubes here or use the Transfer button"),
+          el("div", { className: "text-secondary text-sm mt-2" }, "Drag cubes here from the source list"),
         ));
       } else {
         transferredNames.forEach(cubeName => {
@@ -5027,8 +4378,6 @@ const OptimusPy = (function () {
     // Register pages
     Router.register("home", HomePage);
     Router.register("nav", NavPage);
-    Router.register("cubes", CubesPage);
-    Router.register("cube-workspace", CubeWorkspace);
     Router.register("results", ResultsPage);
     Router.register("jobs", JobsPage);
     Router.register("settings", SettingsPage);
@@ -5052,5 +4401,5 @@ const OptimusPy = (function () {
   }
 
   // Public API (for debugging)
-  return { state, Api, Router, Toast, Modal, Theme, StreamManager, BatchManager, Sidebar };
+  return { state, Api, Router, Toast, Modal, Theme, StreamManager, Sidebar };
 })();

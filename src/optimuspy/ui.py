@@ -473,12 +473,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/instance/"):
             instance_name = unquote(path[len("/api/instance/"):])
             return self._handle_get_instance(instance_name)
-        elif path == "/api/configs":
-            return self._handle_list_configs()
         elif path == "/api/saved-cubes":
             return self._handle_list_saved_cubes()
-        elif path == "/api/status":
-            return self._handle_status()
         elif path == "/api/results":
             return self._handle_list_results()
         elif path.startswith("/api/result/"):
@@ -488,9 +484,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/job/") and path.endswith("/stream"):
             job_id = path[len("/api/job/"):-len("/stream")]
             return self._handle_job_stream(job_id)
-        elif path.startswith("/api/job/"):
-            job_id = path[len("/api/job/"):]
-            return self._handle_get_job(job_id)
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -506,14 +499,10 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             return self._handle_connect(body)
         elif path == "/api/scan":
             return self._handle_scan(body)
-        elif path == "/api/cubes":
-            return self._handle_cubes(body)
         elif path == "/api/views":
             return self._handle_views(body)
         elif path == "/api/processes":
             return self._handle_processes(body)
-        elif path == "/api/dimensions":
-            return self._handle_dimensions(body)
         elif path == "/api/config":
             return self._handle_save_config(body)
         elif path == "/api/validate":
@@ -761,20 +750,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": f"Scan failed: {e}"})
 
-    def _handle_cubes(self, body: dict):
-        instance = body.get("instance")
-        password = body.get("password")
-        if not instance:
-            return self._send_json(400, {"error": "Missing 'instance'"})
-        try:
-            with _create_tm1_connection(instance, password) as tm1:
-                cubes = tm1.cubes.get_all_names()
-                # Filter out control cubes
-                cubes = [c for c in cubes if not c.startswith("}")]
-                self._send_json(200, {"cubes": sorted(cubes)})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
-
     def _handle_views(self, body: dict):
         instance = body.get("instance")
         password = body.get("password")
@@ -820,19 +795,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
-    def _handle_dimensions(self, body: dict):
-        instance = body.get("instance")
-        password = body.get("password")
-        cube = body.get("cube")
-        if not instance or not cube:
-            return self._send_json(400, {"error": "Missing 'instance' or 'cube'"})
-        try:
-            with _create_tm1_connection(instance, password) as tm1:
-                dims = tm1.cubes.get_dimension_names(cube_name=cube)
-                self._send_json(200, {"dimensions": list(dims)})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
-
     def _handle_cube_intelligence(self, body: dict):
         instance = body.get("instance")
         password = body.get("password")
@@ -853,24 +815,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._send_json(500, {"error": str(e)})
-
-    def _handle_list_configs(self):
-        configs = []
-        for d in ["configs", "samples"]:
-            p = Path(d)
-            if p.exists():
-                for f in sorted(p.glob("*.json")):
-                    try:
-                        data = json.loads(f.read_text())
-                        configs.append({
-                            "path": str(f),
-                            "filename": f.name,
-                            "cube": data.get("cube", ""),
-                            "instance": data.get("instance", ""),
-                        })
-                    except Exception:
-                        pass
-        self._send_json(200, {"configs": configs})
 
     def _handle_save_config(self, body: dict):
         config_data = body.get("config")
@@ -923,14 +867,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
                     pass
         self._send_json(200, {"saved_cubes": configs})
 
-    def _handle_status(self):
-        jobs = job_manager.list_jobs()
-        active_jobs = [j for j in jobs if j["status"] == "running"]
-        self._send_json(200, {
-            "active_job": active_jobs[0] if active_jobs else None,
-            "total_jobs": len(jobs),
-        })
-
     def _handle_validate(self, body: dict):
         config = body.get("config")
         mode = body.get("mode", "optimize")
@@ -962,22 +898,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "cancelling"})
         else:
             self._send_json(404, {"error": "Job not found or not running"})
-
-    def _handle_get_job(self, job_id: str):
-        job = job_manager.get_job(job_id)
-        if not job:
-            return self._send_json(404, {"error": "Job not found"})
-        self._send_json(200, {
-            "job_id": job["job_id"],
-            "status": job["status"],
-            "mode": job["mode"],
-            "cube_name": job["cube_name"],
-            "instance": job["instance"],
-            "started_at": job["started_at"],
-            "completed_at": job["completed_at"],
-            "result_files": job["result_files"],
-            "error": job["error"],
-        })
 
     def _handle_job_stream(self, job_id: str):
         job = job_manager.get_job(job_id)
