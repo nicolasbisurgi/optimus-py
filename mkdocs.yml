@@ -11,9 +11,15 @@ edit_uri: edit/master/docs/
 copyright: Copyright &copy; Cubewise CODE
 
 # Exclude internal planning content from the public site
+# Kept out of the built site entirely, not merely out of the nav. mkdocs renders
+# every .md under docs/ whether or not the nav references it, so a page left out
+# of the nav is still published at its URL and still indexed by the search
+# plugin. The ADRs are internal records for contributors; they live in the repo
+# and do not ship.
 exclude_docs: |
   superpowers/
   plans/
+  adr/
 
 theme:
   name: material

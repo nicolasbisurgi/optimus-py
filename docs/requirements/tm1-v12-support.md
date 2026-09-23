@@ -2,7 +2,7 @@
 
 OptimusPy serves TM1 v11 and TM1 v12 (Planning Analytics on Cloud / as a Service) from a single code path. This document states what differs between the two versions and what does not.
 
-The v11-only `}StatsByCube` control cube was the original RAM source and does not exist on v12. Reading memory through TM1py's version-agnostic `MetricService` is what makes one code path possible. See [ADR-0001](../adr/0001-metricservice-replaces-statsbycube.md) for the decision record.
+The v11-only `}StatsByCube` control cube was the original RAM source and does not exist on v12. Reading memory through TM1py's version-agnostic `MetricService` is what makes one code path possible. The decision is recorded in `docs/adr/0001-metricservice-replaces-statsbycube.md` in the repository.
 
 ## MetricService
 

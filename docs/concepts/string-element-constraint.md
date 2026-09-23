@@ -18,7 +18,7 @@ Dimensions are shared between cubes. A dimension can carry string elements becau
 
 Only the dimension in the last storage slot is locked, and only when it has strings.
 
-> **Changed in v2.** Earlier versions moved *every* string-bearing dimension to the back of the proposed order, on the assumption that a cube has at most one. On a cube with a shared string-bearing dimension that is not the measure, v1 relocated it and v2 places it by cardinality. This is the one case where the old and new behaviour genuinely differ — see [ADR-0004](../adr/0004-storage-order-is-the-frame-and-only-the-last-slot-is-locked.md).
+> **Changed in v2.** Earlier versions moved *every* string-bearing dimension to the back of the proposed order, on the assumption that a cube has at most one. On a cube with a shared string-bearing dimension that is not the measure, v1 relocated it and v2 places it by cardinality. This is the one case where the old and new behaviour genuinely differ; it is recorded in `docs/adr/0004-storage-order-is-the-frame-and-only-the-last-slot-is-locked.md` in the repository.
 
 ## What the server does
 

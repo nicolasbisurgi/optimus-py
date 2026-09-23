@@ -32,7 +32,7 @@ Three properties make this safe:
 
 ## Pruning is keyed to the ranking metric
 
-Cardinality predicts *some* of what OptimusPy optimizes for, but not all of it. Pruning is therefore applied only where the ranking metric is something cardinality can predict (see [ADR-0002](../adr/0002-cardinality-pruning-keyed-to-optimization-metric.md)).
+Cardinality predicts *some* of what OptimusPy optimizes for, but not all of it. Pruning is therefore applied only where the ranking metric is something cardinality can predict (recorded in `docs/adr/0002-cardinality-pruning-keyed-to-optimization-metric.md` in the repository).
 
 A grounding fact: the greedy's **back-half positions are always ranked by RAM**, regardless of config. Only the front half's ranking changes.
 
