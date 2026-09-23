@@ -25,7 +25,6 @@ from optimuspy.resume import recover, RecoveryEffects
 from optimuspy.results import ExecutionContext, OptimusResult, ram_signal_is_dead
 
 APP_NAME = "optimuspy"
-TIME_STAMP = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 LOGFILE = APP_NAME + ".log"
 RESULT_PATH = Path("results/")
 RESULT_FILENAME = "{}_{}_{}"  # instance, cube_name, timestamp
@@ -467,6 +466,9 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                            process_parameters: dict = None,
                            dimension_position_rules: list = None,
                            cancel_event=None, is_v12: bool = False) -> bool:
+    # Stamped when the run starts, not when the module loads: the UI runs many
+    # optimizations in one process, and each needs its own report file.
+    run_stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
     # VMM/VMT live in the }CubeProperties control cube, which only exists on v11.
     # On v12 those caps are gone, so we neither raise nor restore them there.
     original_vmm, original_vmt = (None, None)
@@ -719,7 +721,7 @@ def _execute_optimize_mode(tm1: TM1Service, cube_name: str, instance_name: str,
                     optimus_result = OptimusResult(cube_name, unique_for_output, instance_name=instance_name)
                 else:
                     optimus_result.instance_name = instance_name
-                file_base = RESULT_FILENAME.format(instance_name, cube_name, TIME_STAMP)
+                file_base = RESULT_FILENAME.format(instance_name, cube_name, run_stamp)
                 instance_dir = RESULT_PATH / instance_name
 
                 optimus_result.to_html(instance_dir / f"{file_base}.html", total_duration=context.elapsed)

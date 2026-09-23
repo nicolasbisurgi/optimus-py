@@ -3331,7 +3331,7 @@ const OptimusPy = (function () {
       if (transferredNames.length > 0) {
         const actionsRow = el("div", { className: "flex gap-2 mt-3 flex-wrap" });
 
-        const applyBtn = el("button", { className: "btn btn-primary", onClick: () => {
+        const applyBtn = el("button", { id: "transfer-apply-all", className: "btn btn-primary", onClick: () => {
           if (!this._targetConnected) { Toast.error("Connect to target instance first"); return; }
           const orders = {};
           Object.entries(this._transferredCubes).forEach(([name, cube]) => {
@@ -3429,6 +3429,10 @@ const OptimusPy = (function () {
 
     _renderApplyPanel(container) {
       if (!container) return;
+      // Apply All is drawn with the rest of the page; the panel is redrawn on every
+      // sync event, so it keeps the button's state in step with the job.
+      const applyAll = $("#transfer-apply-all");
+      if (applyAll) applyAll.disabled = !!(this._jobId && !this._applyDone);
       container.innerHTML = "";
       if (!this._jobId) return;
       const done = this._applyDone;

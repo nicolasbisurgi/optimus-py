@@ -5,6 +5,7 @@ regression, the chore lifecycle, and recovering a reorder whose response was
 lost to a dropped connection.
 """
 import json
+import logging
 import time
 
 import pytest
@@ -584,3 +585,12 @@ def test_a_resume_keeps_the_throughput_it_already_measured(tmp_path, frozen_cloc
     assert server.reorders == []
     assert result["status"] == "stopped_time_limit"
     assert result["cubes"]["Medium"]["status"] == "pending"
+
+
+def test_list_runs_warns_about_a_run_file_it_cannot_read(tmp_path, caplog):
+    folder = tmp_path / "srv"
+    folder.mkdir()
+    (folder / f"{odb.RUN_PREFIX}broken.json").write_text("{not json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert odb.list_runs(tmp_path) == []
+    assert f"{odb.RUN_PREFIX}broken.json" in caplog.text

@@ -411,20 +411,23 @@ def list_runs(result_path: Path = RESULT_PATH) -> List[dict]:
     """Summaries of every run on disk, newest first — powers the UI recovery list."""
     summaries = []
     for path in Path(result_path).glob(f"*/{RUN_PREFIX}*.json"):
-        with suppress(Exception):
+        try:
             run = read_json(path)
-            summaries.append({
-                "plan_id": run.get("plan_id"),
-                "instance": run.get("instance"),
-                "status": run.get("status"),
-                "started_at": run.get("started_at"),
-                "finished_at": run.get("finished_at"),
-                "chores_state": run.get("chores", {}).get("state"),
-                "chores_pending_restore": run.get("chores", {}).get("state") == "disabled",
-                "cubes_total": len(run.get("cubes", {})),
-                "cubes_done": sum(1 for c in run.get("cubes", {}).values()
-                                  if c.get("status") in ("done", "reverted")),
-            })
+        except Exception as e:
+            logging.warning(f"Skipping unreadable run file '{path}': {e}")
+            continue
+        summaries.append({
+            "plan_id": run.get("plan_id"),
+            "instance": run.get("instance"),
+            "status": run.get("status"),
+            "started_at": run.get("started_at"),
+            "finished_at": run.get("finished_at"),
+            "chores_state": run.get("chores", {}).get("state"),
+            "chores_pending_restore": run.get("chores", {}).get("state") == "disabled",
+            "cubes_total": len(run.get("cubes", {})),
+            "cubes_done": sum(1 for c in run.get("cubes", {}).values()
+                              if c.get("status") in ("done", "reverted")),
+        })
     return sorted(summaries, key=lambda r: r.get("started_at") or 0, reverse=True)
 
 
