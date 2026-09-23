@@ -39,6 +39,12 @@ from optimuspy.optimize_db import (
 DEFAULT_PORT = 8765
 DEFAULT_CONFIG_INI = "config/config.ini"
 
+# config.ini keys that carry a credential. The Settings page writes them through
+# write-only fields; the server never sends them back to the browser.
+SECRET_KEYS = frozenset({
+    "password", "api_key", "application_client_secret", "cam_passport", "access_token",
+})
+
 # Global state
 _config_ini_path = DEFAULT_CONFIG_INI
 _config_read_only = False
@@ -432,12 +438,27 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         # Suppress default HTTP logging to avoid cluttering the console
         pass
 
+    def parse_request(self):
+        # The UI is a page served by this process, and nothing else should call
+        # it. Refusing any other Host (DNS rebinding) or Origin (a page open in
+        # another tab) before dispatch is what stops a site the user happens to
+        # visit from reading config.ini or reordering cubes with its credentials.
+        if not super().parse_request():
+            return False
+        port = self.server.server_address[1]
+        own = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        if self.headers.get("Host") not in own or (
+                origin is not None and origin.split("://", 1)[-1] not in own):
+            self._send_json(403, {"error": "Forbidden"})
+            return False
+        return True
+
     def _send_json(self, status: int, data: dict):
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -449,13 +470,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length))
 
     # ---- Routing ----
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -641,7 +655,8 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
             config = get_tm1_config(_config_ini_path)
             if instance_name not in config:
                 return self._send_json(404, {"error": f"Instance '{instance_name}' not found"})
-            params = dict(config[instance_name])
+            params = {key: value for key, value in config[instance_name].items()
+                      if key.lower() not in SECRET_KEYS}
             self._send_json(200, {"instance": instance_name, "params": params})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
@@ -908,7 +923,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
         # If the job already finished, send the final event immediately
@@ -1154,7 +1168,6 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
 

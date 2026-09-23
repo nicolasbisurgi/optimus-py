@@ -14,6 +14,7 @@ against a simulation.
 """
 import importlib
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -193,3 +194,35 @@ def install_offline_measurements(executor, ram_of, evaluated_log, query_of=None)
 @pytest.fixture
 def measure_orders():
     return install_offline_measurements
+
+
+# --- UI server plumbing -----------------------------------------------------
+
+@pytest.fixture
+def ui_server(tmp_path, monkeypatch):
+    """Start the UI's request handler on a free port, against a throwaway config.ini.
+
+    Returns `start(ini_text, read_only=False) -> (base_url, ini_path)`. The test
+    runs inside `tmp_path`, so the `results/` and `configs/` folders the UI reads
+    and writes are the test's own. Every server started is shut down afterwards.
+    """
+    from http.server import HTTPServer
+    from optimuspy import ui
+
+    monkeypatch.chdir(tmp_path)
+    servers = []
+
+    def start(ini_text, read_only=False):
+        ini = tmp_path / "config.ini"
+        ini.write_text(ini_text, encoding="utf-8")
+        monkeypatch.setattr(ui, "_config_ini_path", str(ini))
+        monkeypatch.setattr(ui, "_config_read_only", read_only)
+        server = HTTPServer(("127.0.0.1", 0), ui.OptimusPyHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return f"http://127.0.0.1:{server.server_address[1]}", ini
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
