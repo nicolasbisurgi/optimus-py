@@ -17,7 +17,7 @@ import time
 import uuid
 import webbrowser
 from contextlib import suppress
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -69,6 +69,12 @@ def _create_tm1_connection(instance_name: str, password: str = None):
 # Job Manager — tracks background optimize/set jobs with SSE progress
 # ---------------------------------------------------------------------------
 
+# Set on every thread that is serving an HTTP request. A running job copies log
+# records from the root logger; the records a request emits while it is served —
+# a scan, a plan build — belong to that request, not to the job's terminal.
+_request_thread = threading.local()
+
+
 class JobLogHandler(logging.Handler):
     """Copies log records into a job's event log, so the page's terminal shows them."""
 
@@ -77,6 +83,8 @@ class JobLogHandler(logging.Handler):
         self.job = job
 
     def emit(self, record):
+        if getattr(_request_thread, "serving", False):
+            return
         try:
             self.job.emit("log", {
                 "timestamp": time.strftime("%H:%M:%S"),
@@ -255,6 +263,10 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress default HTTP logging to avoid cluttering the console
         pass
+
+    def handle(self):
+        _request_thread.serving = True
+        super().handle()
 
     def parse_request(self):
         # The UI is a page served by this process, and nothing else should call
@@ -1045,7 +1057,7 @@ def main():
         ],
     )
 
-    server = HTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), OptimusPyHandler)
     url = f"http://127.0.0.1:{args.port}"
 
     print("\n  OptimusPy Workflow UI")

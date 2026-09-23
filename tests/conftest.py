@@ -206,7 +206,7 @@ def ui_server(tmp_path, monkeypatch):
     runs inside `tmp_path`, so the `results/` and `configs/` folders the UI reads
     and writes are the test's own. Every server started is shut down afterwards.
     """
-    from http.server import HTTPServer
+    from http.server import ThreadingHTTPServer
     from optimuspy import ui
 
     monkeypatch.chdir(tmp_path)
@@ -217,7 +217,7 @@ def ui_server(tmp_path, monkeypatch):
         ini.write_text(ini_text, encoding="utf-8")
         monkeypatch.setattr(ui, "_config_ini_path", str(ini))
         monkeypatch.setattr(ui, "_config_read_only", read_only)
-        server = HTTPServer(("127.0.0.1", 0), ui.OptimusPyHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ui.OptimusPyHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         return f"http://127.0.0.1:{server.server_address[1]}", ini
