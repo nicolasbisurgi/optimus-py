@@ -30,11 +30,14 @@ python -m optimuspy.ui --config config/production.ini
 
 ### From the executable
 
-If you're using the prebuilt Windows `.exe`:
+Double-click `optimuspy.exe`, or run it from a command prompt:
 
 ```cmd
 optimuspy.exe ui
+optimuspy.exe ui --port 8800 --config D:\tm1\config.ini
 ```
+
+With Python installed, `optimuspy ui` does the same.
 
 ## Sidebar navigation
 

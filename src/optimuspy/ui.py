@@ -1090,7 +1090,7 @@ class OptimusPyHandler(BaseHTTPRequestHandler):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main(argv=None):
     global _config_ini_path, _config_read_only
 
     parser = argparse.ArgumentParser(description="OptimusPy Workflow UI")
@@ -1098,7 +1098,7 @@ def main():
                         help=f"Port to listen on (default: {DEFAULT_PORT})")
     parser.add_argument('--config', dest='config_ini', default=None,
                         help=f"Path to TM1 connection config.ini (default: {DEFAULT_CONFIG_INI})")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         location = resolve_config_path(args.config_ini)

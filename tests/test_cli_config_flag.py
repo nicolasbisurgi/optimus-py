@@ -73,3 +73,44 @@ def test_a_tier1_failure_raised_inside_the_run_is_caught_too(
     assert code == 1
     assert "Prodcut" in out
     assert "Traceback" not in out
+
+
+def _capture_ui(monkeypatch):
+    import optimuspy.ui
+    seen = []
+    monkeypatch.setattr(optimuspy.ui, "main", lambda argv=None: seen.append(argv))
+    return seen
+
+
+def test_ui_opens_the_web_ui_with_its_own_options(monkeypatch):
+    seen = _capture_ui(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["optimuspy", "ui", "--port", "9123"])
+    main()
+    assert seen == [["--port", "9123"]]
+
+
+def test_a_double_clicked_executable_opens_the_web_ui(monkeypatch):
+    # A double-click starts the executable with no arguments.
+    seen = _capture_ui(monkeypatch)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr("optimuspy.cli.set_current_directory", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["optimuspy.exe"])
+    main()
+    assert seen == [[]]
+
+
+def test_no_arguments_outside_the_executable_still_asks_for_a_mode(monkeypatch):
+    seen = _capture_ui(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["optimuspy"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert seen == []
+
+
+def test_the_ui_reads_the_options_it_is_given(tmp_path, capsys):
+    from optimuspy import ui
+    with pytest.raises(SystemExit) as exc:
+        ui.main(["--config", str(tmp_path / "nope.ini")])
+    assert exc.value.code == 1
+    assert "not found" in capsys.readouterr().out.lower()

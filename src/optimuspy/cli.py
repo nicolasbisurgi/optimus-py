@@ -137,11 +137,19 @@ def main():
 
     print_banner()
 
+    # The UI parses its own options. The executable reaches it as `optimuspy ui`,
+    # or with no arguments at all, which is what a double-click passes.
+    argv = sys.argv[1:]
+    if argv[:1] == ["ui"] or (not argv and getattr(sys, 'frozen', False)):
+        from optimuspy.ui import main as run_ui  # here, not at the top: ui imports cli
+        return run_ui(argv[1:])
+
     parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
-    parser.add_argument('mode', choices=['optimize', 'set', 'scan', 'optimize-db'],
+    parser.add_argument('mode', choices=['optimize', 'set', 'scan', 'optimize-db', 'ui'],
                         help="Run mode: 'optimize' benchmarks orders, 'set' applies a specific order, "
                              "'scan' discovers optimization candidates, 'optimize-db' applies the "
-                             "heuristic order to every cube in an instance under a time limit")
+                             "heuristic order to every cube in an instance under a time limit, "
+                             "'ui' opens the web UI (its options: --port, --config)")
     parser.add_argument('cube_config', nargs='?', default=None,
                         help="Path to cube JSON configuration file (required for optimize/set)")
     parser.add_argument('--config', dest='config_ini', default=None,
