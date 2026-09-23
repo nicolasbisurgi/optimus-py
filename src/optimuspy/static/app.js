@@ -108,6 +108,49 @@ const OptimusPy = (function () {
     const s = Math.floor(seconds % 60);
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   }
+
+  // ---- Jobs: where each kind lives in the UI, and how its state reads ----
+  // Single-cube jobs belong to their cube's Optimize tab; the instance-wide pass
+  // and the order sync have pages of their own. A job's label is its cube, its
+  // plan id (Optimize DB) or its cube count (a sync).
+  const JOB_KINDS = {
+    "optimize-db": { page: "#/optimize-db", title: "Optimize DB" },
+    transfer: { page: "#/transfer", title: "Sync Order" },
+  };
+  function jobLink(job) {
+    const kind = JOB_KINDS[job.mode];
+    return kind ? kind.page : `#/cube/${encodeURIComponent(job.label)}?tab=optimize`;
+  }
+  function jobTitle(job) {
+    const kind = JOB_KINDS[job.mode];
+    return kind ? kind.title : "Optimizing";
+  }
+  const JOB_STATUS_BADGES = { running: "badge-info", completed: "badge-success", cancelled: "badge-warning", failed: "badge-error" };
+  function jobStatusBadge(status) {
+    return el("span", { className: `badge ${JOB_STATUS_BADGES[status] || "badge-neutral"}` }, status);
+  }
+
+  // How long a job has been running, counted from when the server started it,
+  // so leaving the page and coming back does not reset it. start() replaces
+  // whatever the timer was showing; stop() is safe to call at any time.
+  function createElapsedTimer() {
+    let interval = null;
+    return {
+      start(target, startedAtSeconds) {
+        this.stop();
+        const tick = () => {
+          const s = Math.max(0, Math.floor(Date.now() / 1000 - startedAtSeconds));
+          target.textContent = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60]
+            .map(n => String(n).padStart(2, "0")).join(":");
+        };
+        tick();
+        interval = setInterval(tick, 1000);
+      },
+      stop() {
+        if (interval !== null) { clearInterval(interval); interval = null; }
+      },
+    };
+  }
   // ---- Scan cache (localStorage, keyed by instance) ----
   const ScanCache = {
     _key(instance) { return `op-scan-${instance}`; },
@@ -1347,20 +1390,16 @@ const OptimusPy = (function () {
         const running = jobs.find(j => j.status === "running");
         if (running) {
           container.innerHTML = "";
-          const cubeName = running.label;
-          const bar = el("div", { className: "activity-bar" },
+          container.appendChild(el("div", { className: "activity-bar" },
             el("div", { className: "activity-pulse" }),
             el("div", { className: "activity-label" },
-              el("div", { className: "activity-title" }, "Optimizing"),
-              el("div", { className: "activity-subtitle" }, cubeName),
+              el("div", { className: "activity-title" }, jobTitle(running)),
+              el("div", { className: "activity-subtitle" }, running.label),
             ),
             el("div", { className: "activity-spinner" }),
-          );
-          container.appendChild(bar);
+          ));
           container.classList.remove("hidden");
-          container.onclick = () => {
-            window.location.hash = `#/cube/${encodeURIComponent(cubeName)}?tab=optimize`;
-          };
+          container.onclick = () => Router.navigate(jobLink(running));
         } else {
           container.classList.add("hidden");
           container.innerHTML = "";
@@ -2016,6 +2055,7 @@ const OptimusPy = (function () {
     },
 
     unmount() {
+      CubeWorkspace._releaseJobView();
       this._selectedCube = null;
     },
   };
@@ -2029,29 +2069,10 @@ const OptimusPy = (function () {
     _dimConfigurator: null,
     _jobId: null,
     _unsubStream: null,
-    _timer: null,
-    _timerStart: null,
+    _timer: createElapsedTimer(),
     _tabCache: {},     // tab name → DOM container (cached rendered tabs)
     _tabsEl: null,     // tabs bar element
     _contentEl: null,  // tab content wrapper
-
-    _renderTab(tabName) {
-      const container = el("div", { className: "tab-pane", role: "tabpanel", id: `tabpanel-${tabName}`, "aria-labelledby": `tab-${tabName}`, dataset: { tabPane: tabName } });
-      this._tabCache[tabName] = container;
-      this._contentEl.appendChild(container);
-      switch (tabName) {
-        case "overview": this._renderOverview(container); break;
-        case "configure": this._renderConfigure(container).catch(err => {
-          container.innerHTML = "";
-          container.appendChild(el("div", { className: "empty-state" },
-            el("div", { className: "empty-state-title" }, "Failed to load configuration"),
-            el("div", { className: "empty-state-text" }, err.message),
-          ));
-        }); break;
-        case "optimize": this._renderOptimize(container); break;
-        case "results": this._renderResults(container); break;
-      }
-    },
 
     // ---- Overview Tab ----
     _renderOverview(container) {
@@ -2743,6 +2764,7 @@ const OptimusPy = (function () {
 
     // ---- Optimize Tab ----
     _renderOptimize(container) {
+      this._releaseJobView();
       // Status bar
       const statusBar = el("div", { className: "terminal-status" });
       const statusDot = el("span", { className: "status-dot" });
@@ -2767,23 +2789,27 @@ const OptimusPy = (function () {
       container.appendChild(terminal);
 
       // Determine job for this cube
-      this._findActiveJob().then(jobId => {
-        if (!jobId) {
+      this._findActiveJob().then(job => {
+        this._jobId = job ? job.job_id : null;
+        if (!job) {
           terminal.appendChild(el("div", { className: "terminal-line text-tertiary" }, "No active optimization. Configure and start from the Configure tab."));
           return;
         }
 
-        this._jobId = jobId;
-        const existingLogs = StreamManager.getLogs(jobId);
+        const existingLogs = StreamManager.getLogs(job.job_id);
         existingLogs.forEach(log => appendLog(terminal, log));
 
-        const sseStatus = StreamManager.getStatus(jobId);
+        // This tab's stream manager only knows the jobs this tab has streamed. For
+        // any other job — one started in another tab, or before a reload — the
+        // server's status decides; connecting replays the whole log from the start.
+        const streamed = StreamManager.getStatus(job.job_id);
+        const sseStatus = streamed === "unknown" ? job.status : streamed;
         if (sseStatus === "running") {
           statusDot.classList.add("running");
           statusText.textContent = "Running";
           stopBtn.style.display = "";
-          this._startTimer(timerEl);
-          StreamManager.connect(jobId);
+          this._timer.start(timerEl, job.started_at);
+          StreamManager.connect(job.job_id);
         } else if (sseStatus === "completed") {
           statusDot.classList.add("completed");
           statusText.textContent = "Completed";
@@ -2795,7 +2821,7 @@ const OptimusPy = (function () {
           statusText.textContent = "Cancelled";
         }
 
-        this._unsubStream = StreamManager.subscribe(jobId, (event, data) => {
+        this._unsubStream = StreamManager.subscribe(job.job_id, (event, data) => {
           if (event === "log") {
             appendLog(terminal, data);
             terminal.scrollTop = terminal.scrollHeight;
@@ -2803,21 +2829,21 @@ const OptimusPy = (function () {
             statusDot.className = "status-dot completed";
             statusText.textContent = "Completed";
             stopBtn.style.display = "none";
-            this._stopTimer();
+            this._timer.stop();
             Sidebar.updateActivityMonitor();
             Toast.success("Optimization completed!");
           } else if (event === "error_event") {
             statusDot.className = "status-dot failed";
             statusText.textContent = "Failed";
             stopBtn.style.display = "none";
-            this._stopTimer();
+            this._timer.stop();
             Sidebar.updateActivityMonitor();
             Toast.error("Optimization failed: " + (data.error || "Unknown error"));
           } else if (event === "cancelled") {
             statusDot.className = "status-dot failed";
             statusText.textContent = "Cancelled";
             stopBtn.style.display = "none";
-            this._stopTimer();
+            this._timer.stop();
             Sidebar.updateActivityMonitor();
             Toast.info("Optimization cancelled");
           }
@@ -2843,33 +2869,25 @@ const OptimusPy = (function () {
       }
     },
 
+    // Stop following the job on the Optimize tab. Called before the tab is drawn
+    // again and when the cube page is left, so no stream subscriber or timer
+    // outlives the view it draws into.
+    _releaseJobView() {
+      if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
+      this._timer.stop();
+    },
+
+    // The job this cube's Optimize tab shows: the one running on it, else its most
+    // recent. Asked of the server each time — an id kept from another cube would
+    // show that cube's log here.
     async _findActiveJob() {
-      if (this._jobId) return this._jobId;
       try {
         const data = await Api.getJobs();
-        const jobs = data.jobs || [];
-        // Find running job for this cube
-        const running = jobs.find(j => j.status === "running" && j.label === this._cubeName);
-        if (running) return running.job_id;
-        // Find most recent job for this cube
-        const recent = jobs.filter(j => j.label === this._cubeName);
-        if (recent.length > 0) return recent[0].job_id;
-      } catch { /* */ }
-      return null;
-    },
-
-    _startTimer(timerEl) {
-      this._timerStart = Date.now();
-      this._timer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - this._timerStart) / 1000);
-        const m = String(Math.floor(elapsed / 60)).padStart(2, "0");
-        const s = String(elapsed % 60).padStart(2, "0");
-        timerEl.textContent = `${m}:${s}`;
-      }, 1000);
-    },
-
-    _stopTimer() {
-      if (this._timer) { clearInterval(this._timer); this._timer = null; }
+        const mine = (data.jobs || []).filter(j => !JOB_KINDS[j.mode] && j.label === this._cubeName);
+        return mine.find(j => j.status === "running") || mine[0] || null;
+      } catch {
+        return null;
+      }
     },
 
     // ---- Results Tab (per-cube) ----
@@ -3029,25 +3047,16 @@ const OptimusPy = (function () {
 
         const tbl = createTable({
           columns: [
-            { key: "status", label: "Status", render: r => {
-              const cls = r.status === "running" ? "badge-info" : r.status === "completed" ? "badge-success" : "badge-error";
-              return el("span", { className: `badge ${cls}` }, r.status);
-            }},
-            { key: "cube", label: "Cube", render: r => {
-              const cube = r.label;
-              return el("a", { href: `#/cube/${encodeURIComponent(cube)}?tab=optimize`, className: "font-medium" }, cube);
-            }},
+            { key: "status", label: "Status", render: r => jobStatusBadge(r.status) },
+            { key: "label", label: "Job", render: r => el("a", { href: jobLink(r), className: "font-medium" }, r.label) },
+            { key: "mode", label: "Kind", value: r => jobTitle(r) },
             { key: "instance", label: "Instance", value: r => r.instance || "—" },
-            { key: "mode", label: "Mode", value: r => r.mode || "optimize" },
-            { key: "started", label: "Started", value: r => r.started_at ? new Date(r.started_at * 1000).toLocaleTimeString() : "—" },
-            { key: "job_id", label: "Job ID", render: r => el("span", { className: "text-xs text-tertiary" }, r.job_id?.slice(0, 8) || "—") },
+            { key: "started_at", label: "Started", value: r => formatDate(r.started_at), sortValue: r => r.started_at },
+            { key: "job_id", label: "Job ID", render: r => el("span", { className: "text-xs text-tertiary" }, r.job_id) },
           ],
           data: jobs,
           filterable: false,
-          onRowClick: (row) => {
-            const cube = row.label;
-            if (cube) Router.navigate(`#/cube/${encodeURIComponent(cube)}?tab=optimize`);
-          },
+          onRowClick: row => Router.navigate(jobLink(row)),
         });
         page.appendChild(tbl.el);
       } catch (err) {
@@ -3483,8 +3492,8 @@ const OptimusPy = (function () {
     _planKey: null,
     _jobId: null,
     _unsubStream: null,
-    _timer: null,
-    _timerStart: null,
+    _timer: createElapsedTimer(),
+    _jobStartedAt: null,
 
     mount() {
       const page = $("#page-optimize-db");
@@ -3513,10 +3522,11 @@ const OptimusPy = (function () {
       if (this._jobId) {
         this._renderProgress(progressContainer);
       } else {
-        this._adoptActiveJob().then(jobId => {
+        this._adoptActiveJob().then(job => {
           // The lookup is async — do not attach a stream to a page the user left.
-          if (!jobId || !page.classList.contains("active")) return;
-          this._jobId = jobId;
+          if (!job || !page.classList.contains("active")) return;
+          this._jobId = job.job_id;
+          this._jobStartedAt = job.started_at;
           this._renderProgress($("#optdb-progress") || progressContainer);
         });
       }
@@ -3860,6 +3870,7 @@ const OptimusPy = (function () {
         try {
           const resp = await Api.optimizeDbRun(instance, Credentials.get(instance), planId);
           this._jobId = resp.job_id;
+          this._jobStartedAt = resp.started_at;
           StreamManager.connect(resp.job_id);
           this._renderProgress($("#optdb-progress"));
           Sidebar.updateActivityMonitor();
@@ -3877,17 +3888,16 @@ const OptimusPy = (function () {
       try {
         const data = await Api.getJobs();
         const jobs = (data.jobs || []).filter(j => j.mode === "optimize-db");
-        const running = jobs.find(j => j.status === "running");
-        if (running) return running.job_id;
-        if (jobs.length > 0) return jobs[0].job_id;
-      } catch { /* no job history available */ }
-      return null;
+        return jobs.find(j => j.status === "running") || jobs[0] || null;
+      } catch {
+        return null;
+      }
     },
 
     _renderProgress(container) {
       if (!container) return;
       if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
-      this._stopTimer();
+      this._timer.stop();
       container.innerHTML = "";
       if (!this._jobId) return;
 
@@ -3947,7 +3957,7 @@ const OptimusPy = (function () {
         statusDot.classList.add("running");
         statusText.textContent = "Running";
         stopBtn.style.display = "";
-        this._startTimer(timerEl);
+        this._timer.start(timerEl, this._jobStartedAt || Date.now() / 1000);
         StreamManager.connect(this._jobId);
       } else if (sseStatus === "completed") {
         statusDot.classList.add("completed");
@@ -3964,7 +3974,7 @@ const OptimusPy = (function () {
           return;
         }
         stopBtn.style.display = "none";
-        this._stopTimer();
+        this._timer.stop();
         Sidebar.updateActivityMonitor();
         if (event === "complete") {
           const run = (data && data.run) || null;
@@ -4025,21 +4035,6 @@ const OptimusPy = (function () {
         container.appendChild(el("div", { className: "text-sm text-secondary" },
           `Re-activated ${(chores.deactivated || []).length} chore(s).`));
       }
-    },
-
-    _startTimer(timerEl) {
-      this._timerStart = Date.now();
-      this._timer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - this._timerStart) / 1000);
-        const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
-        const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
-        const s = String(elapsed % 60).padStart(2, "0");
-        timerEl.textContent = `${h}:${m}:${s}`;
-      }, 1000);
-    },
-
-    _stopTimer() {
-      if (this._timer) { clearInterval(this._timer); this._timer = null; }
     },
 
     // ---- Recovery ----
@@ -4149,7 +4144,7 @@ const OptimusPy = (function () {
 
     unmount() {
       if (this._unsubStream) { this._unsubStream(); this._unsubStream = null; }
-      this._stopTimer();
+      this._timer.stop();
     },
   };
 
