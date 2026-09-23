@@ -1,4 +1,7 @@
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -114,3 +117,14 @@ def test_the_ui_reads_the_options_it_is_given(tmp_path, capsys):
         ui.main(["--config", str(tmp_path / "nope.ini")])
     assert exc.value.code == 1
     assert "not found" in capsys.readouterr().out.lower()
+
+
+def test_the_banner_survives_a_console_that_cannot_encode_it(tmp_path):
+    # On Windows a redirected stdout is cp1252, which has no box-drawing
+    # characters. A TI process capturing the output must not kill the run.
+    src = Path(__file__).resolve().parents[1] / "src"
+    env = dict(os.environ, PYTHONPATH=str(src), PYTHONIOENCODING="cp1252")
+    done = subprocess.run([sys.executable, "-m", "optimuspy.cli", "--help"],
+                          cwd=tmp_path, env=env, capture_output=True)
+    assert done.returncode == 0, done.stderr.decode("cp1252", "replace")
+    assert b"optimize-db" in done.stdout

@@ -2,6 +2,7 @@
 import argparse
 import logging
 import sys
+from contextlib import suppress
 
 from TM1py import TM1Service
 
@@ -131,6 +132,12 @@ def print_banner():
 
 
 def main():
+    # A redirected stdout on Windows is cp1252, which cannot encode the banner.
+    # A character the console cannot show becomes '?' rather than ending the run.
+    for stream in (sys.stdout, sys.stderr):
+        with suppress(AttributeError):
+            stream.reconfigure(errors="replace")
+
     # Only change CWD for frozen exe — pip/script users expect CWD-relative paths
     if getattr(sys, 'frozen', False):
         set_current_directory()
