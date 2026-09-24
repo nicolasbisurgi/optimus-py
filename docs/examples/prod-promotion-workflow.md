@@ -52,7 +52,15 @@ exports/
 
 Each file's `instance` field is set to whatever target you had selected — edit if needed.
 
-> 📸 **Screenshot needed:** Sync Order page after Export, showing source connected to DEV and the success toast.
+![Sync Order page after Export to Folder, with the success toast](../assets/images/optimuspy/ui/sync-order-export.png)
+
+That export wrote one file per cube:
+
+```text
+exports/
+├── plan_BudgetPlan.json
+└── plan_Report.json
+```
 
 ## Step 3 — Apply to PROD
 

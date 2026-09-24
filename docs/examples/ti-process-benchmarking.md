@@ -54,7 +54,7 @@ Iteration 12 of 30 - Result: RAM [GB]: 3.12 - Query [s]: 0.84321 - Process [s]: 
 
 The chosen winner is ranked by composite query time (when views are present) — process time is reported for verification, not for ranking. If you want process time to drive the ranking, use processes only with no views.
 
-> 📸 **Screenshot needed:** XLSX opened in Excel with separate sheets for permutations, per-view times, and per-process times.
+The XLSX has one sheet, `Sheet1`: a short header (report title, instance, cube, generation time), then the same column header and one row per tested order as the CSV, with the original order and the result shaded.
 
 ## Sample file
 

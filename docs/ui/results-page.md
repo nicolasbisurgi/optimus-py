@@ -2,7 +2,7 @@
 
 All optimization runs write artifacts to the local `results/` directory, in a folder per instance. The Results page lists them with most recent first and lets you open each file.
 
-> 📸 **Screenshot needed:** Results page showing a list of result files with cube names, types, and timestamps.
+![Results page listing the CSV and HTML files of one optimization, with instance, cube, type, size and date](../assets/images/optimuspy/ui/results-page.png)
 
 ## Result file types
 
@@ -24,13 +24,13 @@ Open any `.html` file. Below the summary cards and the recommended dimension ord
 
 Cards side by side: **Best Overall**, then **#1 Fastest Query** (when views were benchmarked), **#1 Fastest Process** (when processes were) and **#1 Lowest RAM**. Click a card to highlight its row in the table.
 
-> 📸 **Screenshot needed:** The podium section of the HTML report with three side-by-side order cards.
+![Report podium with the Best Overall, #1 Fastest Query and #1 Lowest RAM cards](../assets/images/optimuspy/report/report-podium.png)
 
 ### Scatter chart (Chart.js)
 
 Every tested permutation plotted on RAM (X) vs query time relative to the original order (Y). Hover any dot for the full order. The original order is marked in a contrasting color.
 
-> 📸 **Screenshot needed:** Scatter chart showing all tested orders, with the original and best orders highlighted.
+![Scatter chart of every tested order, RAM against query time relative to the original, with the original order and the result marked](../assets/images/optimuspy/report/report-scatter.png)
 
 ### Detail table
 

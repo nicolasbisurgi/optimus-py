@@ -48,7 +48,13 @@ results/
 └── Sales_2026-04-01_15-23-44.csv    ← raw data
 ```
 
-> 📸 **Screenshot needed:** The CSV opened in Excel showing one row per permutation with RAM values.
+The CSV has one row per tested order. Its column header and first two rows, from a run on `plan_BudgetPlan` with one view:
+
+```text
+ID,Mode,Is Best,Composite Query Time,Query Ratio,Composite Process Time,Process Ratio,RAM,RAM in GB,% Reduction,Reorder Duration,Dimension1,Dimension2,Dimension3,Dimension4,Dimension5,Dimension6,Dimension7
+1,Original Order,False,0.15396904945373535,0.0,0,0,4191232.0,0.0039033889770507812,0%,0.17728924751281738,plan_version,plan_business_unit,plan_exchange_rates,plan_department,plan_source,plan_chart_of_accounts,plan_time
+2,Iterations,False,0.15952587127685547,0.036090511975199524,0,0,4191232.0,0.0039033889770507812,0%,0.3442380428314209,plan_business_unit,plan_version,plan_exchange_rates,plan_department,plan_source,plan_chart_of_accounts,plan_time
+```
 
 ## When this is enough
 

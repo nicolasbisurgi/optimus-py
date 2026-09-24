@@ -2,7 +2,7 @@
 
 Manage TM1 connections, browser theme, local cache, and saved cube configs — all without touching `config.ini` by hand.
 
-> 📸 **Screenshot needed:** Settings page with the TM1 Instances card expanded and a connection's fields visible.
+![Settings page with the TM1 Instances card showing the fields of an example instance](../assets/images/optimuspy/ui/settings-page.png)
 
 ## Appearance
 
@@ -25,13 +25,13 @@ If OptimusPy was launched with an explicit `--config PATH` (see [TM1 Connection]
 
 Click **Save** to persist changes to `config.ini`.
 
-> 📸 **Screenshot needed:** A field row with the delete (×) button and the Add Field button below.
+![Instance field rows, each with a delete (×) button, and the Add Field button below](../assets/images/optimuspy/ui/settings-field-rows.png)
 
 ### Test Connection
 
 Connects to the live TM1 server with the instance's saved `config.ini` fields — Save first to test an edit — and the password typed in **Update Password**, or else the one given in the Connect dialog. Returns server name and cube count on success, or a clear error toast on failure.
 
-> 📸 **Screenshot needed:** A success toast showing "Connected to {server} ({cube_count} cubes)".
+![Test Connection success toast showing the server name and cube count](../assets/images/optimuspy/ui/settings-test-connection-toast.png)
 
 ### New Instance
 

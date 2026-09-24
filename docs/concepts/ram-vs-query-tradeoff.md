@@ -37,7 +37,7 @@ Ties are broken by RAM (when ranking by query time) or by query time (when ranki
 
 The HTML report's **scatter chart** plots both axes so you can see the full Pareto front, not just the winner. Sometimes a slightly-worse-on-the-primary-metric order is dramatically better on the secondary one — the scatter view makes that obvious.
 
-> 📸 **Screenshot needed:** Scatter chart with one obvious winner and a Pareto-front alternative highlighted.
+![Scatter chart of every tested order, RAM against query time relative to the original, with the original order and the result marked](../assets/images/optimuspy/report/report-scatter.png)
 
 ## Process time
 

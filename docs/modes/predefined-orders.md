@@ -31,7 +31,7 @@ OptimusPy benchmarks **only** these three orders. The original order is also eva
 
 The Optimize page → Configure tab → **Mode: Predefined Orders** opens a builder. Drag dimensions to reorder them, then click **Add Order** to save. The builder shows the **leaf element count** next to each dimension to help you sort by size at a glance.
 
-> 📸 **Screenshot needed:** The Build Predefined Order modal with leaf element counts visible next to each dimension.
+![Build Predefined Order modal with the leaf element count next to each dimension](../assets/images/optimuspy/ui/predefined-order-modal.png)
 
 You can add multiple orders to test them all in one run.
 

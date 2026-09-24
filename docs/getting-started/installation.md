@@ -43,8 +43,6 @@ Download the latest `.exe` build when you cannot install Python (locked-down ser
 4. Unzip it. The `optimuspy/` folder holds `optimuspy.exe`, `config/config.ini.example` and `samples/` (example cube configs).
 5. Double-click `optimuspy.exe` to open the web UI and add your TM1 instances under **Settings**. For the command line, copy `config/config.ini.example` to `config/config.ini` and fill it in.
 
-> 📸 **Screenshot needed:** The GitHub Actions Artifacts section showing the downloadable `.exe` bundle.
-
 ## Next step
 
 Configure your first TM1 connection: [TM1 Connection →](tm1-connection.md)

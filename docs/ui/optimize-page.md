@@ -2,7 +2,7 @@
 
 The Optimize page is the heart of OptimusPy. Connect to an instance, scan for candidate cubes, and configure benchmarks — one cube at a time or in bulk.
 
-> 📸 **Screenshot needed:** Optimize page with cube list populated and a cube selected.
+![Optimize page with the cube list of tm1srv01 and plan_BudgetPlan selected](../assets/images/optimuspy/ui/optimize-cube-selected.png)
 
 ## Connecting & scanning
 
@@ -20,7 +20,7 @@ Click any cube in the list to open its workspace. Four tabs:
 
 Dimension table with leaf element counts, string-element flags, and a **Suggested Order**: dimensions ordered by leaf-element count, fewest first, with a string-bearing dimension kept last.
 
-> 📸 **Screenshot needed:** Overview tab showing dimension table and Suggested Order panel.
+![Overview tab of plan_BudgetPlan with the Suggested Order and the dimension table with leaf element counts](../assets/images/optimuspy/ui/optimize-overview-tab.png)
 
 ### Configure
 
@@ -40,7 +40,7 @@ For each mode you can:
 - Set **dimension position rules** (lock specific dims to specific positions)
 - Toggle **auto-apply** to write the best order back to the cube
 
-> 📸 **Screenshot needed:** Configure tab with greedy mode, views selected, and dimension position rules applied.
+![Configure tab in Greedy mode with one view and a dimension position rule in the Config Preview](../assets/images/optimuspy/ui/optimize-configure-tab.png)
 
 The **Config Preview** beside the form shows the generated JSON config (it's identical to what the CLI consumes). **Save & Start Optimization** saves it to `configs/`, starts the job in the background and opens the Optimize tab. **Save Config Only** saves it without starting.
 
@@ -48,7 +48,7 @@ The **Config Preview** beside the form shows the generated JSON config (it's ide
 
 The job's status, elapsed time and live log, with a **Stop** button while it runs. A run that fails shows as **Failed**, with the error in the log. The tab finds the cube's job on the server, so it also shows a job started in another browser tab or before a reload, replaying its log from the start.
 
-> 📸 **Screenshot needed:** Run tab with JSON preview and Run button.
+![Config Preview with the Save & Start Optimization and Save Config Only buttons](../assets/images/optimuspy/ui/optimize-config-preview.png)
 
 ### Results
 

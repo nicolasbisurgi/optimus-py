@@ -2,7 +2,7 @@
 
 Promote optimized dimension orders from a non-production instance (where you ran benchmarks) to production (where you didn't). Drag cubes from a Source panel on the left to a Target panel on the right, then either apply directly or export CLI-compatible JSON files.
 
-> 📸 **Screenshot needed:** Sync Order page with both panels populated and a cube being dragged from Source to Target.
+![Sync Order page with the source cube list and two cubes dropped on the target panel](../assets/images/optimuspy/ui/sync-order-page.png)
 
 ## Source panel
 
@@ -19,7 +19,7 @@ The drag order matters — the order in which you drop cubes into the Target pan
     - **Current (Target)** — the cube's current storage order on the target instance
     - **Proposed (Source)** — the storage order from the source instance, with changes highlighted
 
-> 📸 **Screenshot needed:** A target card showing current vs proposed orders side by side, with highlighted dim changes.
+![Target card showing the current and proposed orders side by side; source and target are the same instance here, so the orders match](../assets/images/optimuspy/ui/sync-order-target-card.png)
 
 3. Cubes that don't exist on the target are flagged with a warning and excluded from Apply.
 

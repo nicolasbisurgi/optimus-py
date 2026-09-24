@@ -43,7 +43,7 @@ Where:
 
 Open the generated `.html`. The podium ranks by composite query time (lowest = best). The scatter plot shows every order on RAM (X) vs query time (Y) — look for orders that are good on both axes, not just the winner.
 
-> 📸 **Screenshot needed:** Scatter plot with both axes labeled (RAM GB on X, Query time s on Y), several Pareto-optimal points visible.
+![Scatter chart from a one-view, one-execution run: RAM (GB) on X, query time relative to the original order on Y](../assets/images/optimuspy/report/report-scatter.png)
 
 ## Designing benchmark views
 

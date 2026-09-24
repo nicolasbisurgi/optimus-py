@@ -19,7 +19,15 @@ exports/
 └── Forecast.json
 ```
 
-> 📸 **Screenshot needed:** The Sync Order page after Export, showing the success toast and a Finder/Explorer view of the exports/ folder.
+![Sync Order page after Export to Folder, with the success toast](../assets/images/optimuspy/ui/sync-order-export.png)
+
+That export wrote one file per cube:
+
+```text
+exports/
+├── plan_BudgetPlan.json
+└── plan_Report.json
+```
 
 ## CLI-compatible JSON format
 
