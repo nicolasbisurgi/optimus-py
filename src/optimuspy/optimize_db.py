@@ -942,10 +942,10 @@ def format_run_summary(run: dict) -> str:
         f"Optimize DB run {run['plan_id']} — {status_label}",
         f"  Elapsed        : {format_duration(totals.get('elapsed_s'))}",
         f"  Reordered      : {totals.get('cubes_reordered', 0)} cubes",
-        f"  Reverted       : {totals.get('cubes_reverted', 0)} (heuristic made them worse)",
+        f"  Reverted       : {totals.get('cubes_reverted', 0)} (they used more memory after the reorder)",
         f"  Skipped        : {totals.get('cubes_skipped', 0)}",
         f"  Failed         : {totals.get('cubes_failed', 0)}",
-        f"  Not reached    : {totals.get('cubes_pending', 0)}",
+        f"  Not started    : {totals.get('cubes_pending', 0)}",
         f"  Expected saving: {_gb(totals.get('bytes_saved', 0)):.2f} GB (visible after a restart)",
     ]
     chores = run.get("chores", {})

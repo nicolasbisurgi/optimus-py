@@ -53,7 +53,7 @@ https://docs.google.com/spreadsheets/d/1dtgl9WkYcsyokWNdX29m4K_5oNm3MI3iTOH2f_g6
 | `optimize` | Benchmark dimension orders for one cube and report the best one |
 | `set` | Apply a specific order to one cube without benchmarking |
 | `scan` | Discover candidate cubes in an instance, ranked by RAM |
-| `optimize-db` | Apply the cardinality heuristic to every cube in an instance under a time limit — nothing is benchmarked. Run it overnight on a dedicated instance, restart TM1, then run the real `optimize` exercise against a smaller footprint |
+| `optimize-db` | Reorder every cube in an instance with one simple rule — dimensions ordered by leaf-element count, fewest first — within a time limit. Nothing is benchmarked. Run it overnight on a dedicated instance, restart TM1, then run the real `optimize` exercise against a smaller footprint |
 
 ```bash
 optimuspy optimize my_cube.json

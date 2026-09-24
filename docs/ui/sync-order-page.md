@@ -25,9 +25,9 @@ The drag order matters — the order in which you drop cubes into the Target pan
 
 ## Apply All
 
-Asks for confirmation, naming how many cubes will be rebuilt on the target and how many already have the proposed order. It then applies the orders one cube at a time as a background job, and a results panel below the two instances fills in as it goes. Each cube is reported as **applied**, **skipped** (already in that order, so it is not rebuilt) or **failed** with the server's message. One failure does not stop the batch, but the job ends as failed so it cannot be mistaken for a clean sync. **Stop after current cube** ends the batch at the next cube boundary: a reorder already sent always finishes.
+Asks for confirmation, naming how many cubes will be rebuilt on the target and how many already have the proposed order. It then applies the orders one cube at a time as a background job, and a results panel below the two instances fills in as it goes. Each cube is reported as **applied**, **skipped** (already in that order, so it is not rebuilt) or **failed** with the server's message. One failure does not stop the batch, but the job ends as failed so it cannot be mistaken for a clean sync. **Stop after current cube** ends the batch before the next cube: the cube being reordered always finishes. **Apply All** stays disabled while a sync runs.
 
-Instances whose password is not stored in `config.ini` are asked for it once per session when you connect them.
+The first time you connect an instance after the page loads, it asks for the password; leave it blank if `config.ini` stores it. A reload asks again.
 
 !!! warning "Production effect"
     Apply All directly mutates the target cube via `update_storage_dimension_order`. There is no preview-only mode. Verify the target panel before clicking.

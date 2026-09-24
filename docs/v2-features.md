@@ -171,7 +171,7 @@ v2.0 separates concerns:
 optimuspy optimize config.json           # Benchmark and find best order
 optimuspy set config.json                # Apply an order directly
 optimuspy scan --instance tm1srv01       # Discover optimization candidates
-optimuspy optimize-db instructions.json  # Heuristic pass over a whole instance
+optimuspy optimize-db instructions.json  # Quick pass over a whole instance: leaf-element count, fewest first
 ```
 
 ### JSON config example
@@ -294,7 +294,7 @@ The blob is named `optimuspy_checkpoint_{cube}.json` and uses the same TM1 conne
 | HTML report | Yes | Yes | Yes | Yes | — | — | — |
 | CSV/XLSX/PNG output | Yes | Yes | Yes | Yes | — | — | — |
 | Auto-apply best order | Yes | Yes | Yes | Yes | Yes | — | — |
-| Applies the heuristic order | — | — | — | — | — | — | Yes |
+| Orders dimensions by leaf-element count, fewest first | — | — | — | — | — | — | Yes |
 | Whole-instance scope | — | — | — | — | — | Yes | Yes |
 | Generate configs | — | — | — | — | — | Yes | — |
 

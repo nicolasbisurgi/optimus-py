@@ -29,13 +29,13 @@ Click **Save** to persist changes to `config.ini`.
 
 ### Test Connection
 
-Validates the current field values against the live TM1 server without saving. Returns server name and cube count on success, or a clear error toast on failure.
+Connects to the live TM1 server with the instance's saved `config.ini` fields — Save first to test an edit — and the password typed in **Update Password**, or else the one given in the Connect dialog. Returns server name and cube count on success, or a clear error toast on failure.
 
 > 📸 **Screenshot needed:** A success toast showing "Connected to {server} ({cube_count} cubes)".
 
 ### New Instance
 
-Click **+ New Instance** above the tabs. A modal asks for the instance name (no `]` characters, no leading/trailing whitespace). The new section appears as an empty tab where you add fields.
+Click **+ New Instance** above the tabs. A modal asks for the instance name (no `]` characters, no leading/trailing whitespace). The new section appears as an empty tab where you add fields. If there is no `config.ini` yet — the executable ships without one — the first instance created here creates `config/config.ini`.
 
 ### Delete Instance
 

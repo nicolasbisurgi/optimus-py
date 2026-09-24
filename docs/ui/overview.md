@@ -28,6 +28,8 @@ python -m optimuspy.ui --port 9000
 python -m optimuspy.ui --config config/production.ini
 ```
 
+A file passed with `--config` is treated as belonging to another tool, so Settings shows it read-only — see [Read-only config.ini](settings-page.md#read-only-configini).
+
 ### From the executable
 
 Double-click `optimuspy.exe`, or run it from a command prompt:
@@ -39,23 +41,30 @@ optimuspy.exe ui --port 8800 --config D:\tm1\config.ini
 
 With Python installed, `optimuspy ui` does the same.
 
+The executable ships without a `config.ini`. The first instance you add in [Settings](settings-page.md#new-instance) creates `config/config.ini` next to it.
+
 ## Sidebar navigation
 
 ![OptimusPy sidebar with all five pages](../assets/images/optimuspy/ui/sidebar-overview.png)
 
 | Item | Purpose |
 |---|---|
-| **Instance switcher** | Pick the active TM1 connection. The current instance powers all pages. |
+| **Instance switcher** | Pick the active TM1 connection. It is the instance the Optimize page works on; Sync Order and Optimize DB pick their own. |
 | **Optimize** | Scan candidates and run benchmarks for one or many cubes. |
-| **Sync Order** | Promote dimension orders from a source instance to a target instance. |
 | **Results** | Browse generated HTML / CSV / XLSX reports. |
-| **Settings** | Manage TM1 connections, theme, and local cache. |
+| **Sync Order** | Promote dimension orders from a source instance to a target instance. |
+| **Optimize DB** | Reorder every cube on an instance by leaf-element count, fewest first, within a time limit — see [Optimize DB mode](../modes/optimize-db.md). |
+| **Settings** | At the bottom of the sidebar: manage TM1 connections, theme, and local cache. |
 
-The sidebar collapses to icons on narrow screens. The **Activity Monitor** at the bottom shows live progress when a job is running.
+The sidebar collapses to icons on narrow screens. While a job is running, the **Activity Monitor** appears below the page links and names it; click it to open the job's page. The [Jobs page](jobs-page.md) has no sidebar item: open it at `#/jobs`, for example `http://127.0.0.1:8765/#/jobs`.
+
+## Passwords
+
+The first time you use an instance after the page loads — from the instance switcher, Sync Order or Optimize DB — a **Connect to Instance** dialog asks for its password. Leave it blank if `config.ini` stores the password. The password you type is kept by the page only, so a reload asks again. A refused login shows TM1's answer, for example `Connection failed: TM1 returned 401 Unauthorized`.
 
 ## Live progress (SSE)
 
-Long-running jobs stream progress over Server-Sent Events. You'll see per-iteration updates without refreshing the page — works in any modern browser.
+Long-running jobs stream progress over Server-Sent Events. You'll see per-iteration updates without refreshing the page — works in any modern browser. A running job is not tied to the tab that started it: open its page after a reload or in a second tab and the log is replayed from the start.
 
 ## Caching
 
@@ -70,5 +79,7 @@ If you change something on the TM1 server (e.g. delete string elements, rename a
 
 - **[Optimize](optimize-page.md)** — the main workflow: scan, configure, run.
 - **[Sync Order](sync-order-page.md)** — drag-and-drop cross-instance promotion.
+- **[Optimize DB](../modes/optimize-db.md)** — reorder every cube on an instance within a time limit.
 - **[Results](results-page.md)** — generated HTML reports + raw data.
+- **[Jobs](jobs-page.md)** — every job since the UI server started.
 - **[Settings](settings-page.md)** — connection CRUD + cache management.
