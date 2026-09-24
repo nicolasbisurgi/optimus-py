@@ -580,20 +580,20 @@ def execute_plan(connect: Callable[[], object], plan: dict, run: dict,
 
             if cancel_event is not None and cancel_event.is_set():
                 status = "cancelled"
-                logging.info("Optimize DB cancelled — stopping at cube boundary")
+                logging.info("Optimize DB stopped — no further cube will be started")
                 break
 
             now = time.time()
             fits, estimate = fits_in_budget(entry["ram_bytes"], run["samples"], now, deadline)
             elapsed = now - run["started_at"]
-            decision = (f"elapsed {format_duration(elapsed)} · next '{cube}' "
-                        f"{_gb(entry['ram_bytes']):.2f} GB · est {format_duration(estimate)} · "
-                        f"limit {options['time_limit_hours']:.2f}h")
+            expected = "no estimate yet" if estimate is None else f"about {format_duration(estimate)}"
+            decision = (f"'{cube}' ({_gb(entry['ram_bytes']):.2f} GB, {expected}) — "
+                        f"{format_duration(elapsed)} of the {options['time_limit_hours']:.2f}h limit used")
             if not fits:
-                logging.info(f"{decision} · would exceed the limit — stopping")
+                logging.info(f"Not starting {decision}: it would run past the limit")
                 status = "stopped_time_limit"
                 break
-            logging.info(f"{decision} · proceeding")
+            logging.info(f"Starting {decision}")
 
             try:
                 tm1, outcome = _reorder_cube(tm1, connect, cube, entry, state,
@@ -822,8 +822,8 @@ def optimize_db(connect: Callable[[], object], config: dict = None, plan: dict =
         if run["status"] == "completed":
             logging.info(f"Run '{resume_plan_id}' already completed — nothing to resume")
             return run
-        logging.info(f"Resuming run '{resume_plan_id}' against its original deadline "
-                     f"({format_duration(run['deadline_at'] - time.time())} left)")
+        logging.info(f"Resuming run '{resume_plan_id}' — "
+                     f"{format_duration(run['deadline_at'] - time.time())} left of its original time limit")
         with connect() as tm1:
             reset = prepare_resume(tm1, plan, run, run.get("is_v12", False))
         if reset:

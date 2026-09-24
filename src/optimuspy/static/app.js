@@ -3475,11 +3475,11 @@ const OptimusPy = (function () {
   };
 
   // ==================================================================
-  // Page: Optimize DB — instance-wide heuristic dimension-order pass
+  // Page: Optimize DB — reorder every cube on an instance by leaf-element count
   // ==================================================================
-  // Skip reasons arrive as codes; these mirror SKIP_LABELS in optimize_db.py.
+  // Skip reasons arrive as codes; these are the page's wording for SKIP_LABELS in optimize_db.py.
   const OPTDB_SKIP_LABELS = {
-    excluded: "Excluded by instructions",
+    excluded: "Excluded in the run settings",
     empty: "No memory in use",
     below_min_ram: "Below minimum cube size",
     too_few_dimensions: "Fewer than 3 dimensions",
@@ -3505,7 +3505,7 @@ const OptimusPy = (function () {
     return ((bytes || 0) / 1073741824).toFixed(2) + " GB";
   }
 
-  // Sweeps run for hours — the shared formatDuration only reaches minutes.
+  // A run can take hours — the shared formatDuration only reaches minutes.
   function optdbDuration(seconds) {
     const total = Math.floor(seconds || 0);
     if (total < 3600) return formatDuration(total);
@@ -3539,7 +3539,7 @@ const OptimusPy = (function () {
       page.appendChild(el("div", { className: "page-header" },
         el("h1", { className: "page-title" }, "Optimize DB"),
         el("p", { className: "page-subtitle" },
-          "Apply the cardinality heuristic to every cube in an instance, one cube at a time, under a wall-clock budget"),
+          "Reorder the dimensions of every cube on an instance, one cube at a time, within a time limit you set"),
       ));
 
       page.appendChild(this._buildNotice());
@@ -3577,10 +3577,10 @@ const OptimusPy = (function () {
         el("span", { html: Icons.info }), "How this mode behaves"));
       const list = el("ul", { className: "optdb-notice-list" });
       [
-        "This is the heuristic pass, not the measured Optimize search. Every cube gets leaf-count-ascending order applied once — no permutation is benchmarked and nothing is timed against a view.",
-        "The time limit is checked only between cubes. A reorder already in flight is a blocking server-side rebuild with no safe abort, so the run can overshoot the limit by the duration of the cube it last started.",
-        "The reported saving is what the server returns per cube. Instance memory does not drop until TM1 is restarted.",
-        "Run it on a dedicated instance with no users on it, then restart TM1 before the real Optimize exercise.",
+        "This is a quick pass with one simple rule, not the full search the Optimize page runs. Each cube's dimensions are put in order of their leaf-element count, fewest first, and applied once. Nothing is tested against views or TI processes.",
+        "The time limit is checked before each cube starts. While TM1 reorders a cube, the cube is locked and the reorder cannot be safely interrupted, so the run can end later than the limit by as long as its last cube takes.",
+        "The memory saving shown is what TM1 reports for each cube. The instance's total memory only goes down after TM1 is restarted.",
+        "Run it on an instance nobody is using, such as a copy of production. Restart TM1 afterwards, before optimizing individual cubes on the Optimize page.",
       ].forEach(text => list.appendChild(el("li", null, text)));
       notice.appendChild(list);
       return notice;
@@ -3589,7 +3589,7 @@ const OptimusPy = (function () {
     // ---- Instructions form ----
     _buildForm() {
       const card = el("div", { className: "card mb-4" });
-      card.appendChild(el("div", { className: "card-title mb-4" }, "Instructions"));
+      card.appendChild(el("div", { className: "card-title mb-4" }, "Run settings"));
 
       const row1 = el("div", { className: "form-row-3" });
 
@@ -3615,7 +3615,7 @@ const OptimusPy = (function () {
         limitInput.value = String(this._timeLimitHours);
       });
       limitGroup.appendChild(limitInput);
-      limitGroup.appendChild(el("div", { className: "form-hint" }, "Checked between cubes only — the last cube started always finishes"));
+      limitGroup.appendChild(el("div", { className: "form-hint" }, "Checked before each cube — a cube already being reordered always finishes"));
       row1.appendChild(limitGroup);
 
       const minGroup = el("div", { className: "form-group" });
@@ -3630,7 +3630,7 @@ const OptimusPy = (function () {
         minInput.value = String(this._minCubeMb);
       });
       minGroup.appendChild(minInput);
-      minGroup.appendChild(el("div", { className: "form-hint" }, "Smaller cubes are skipped — the rebuild costs more than it saves"));
+      minGroup.appendChild(el("div", { className: "form-hint" }, "Smaller cubes are skipped — reordering them costs more time than it saves memory"));
       row1.appendChild(minGroup);
       card.appendChild(row1);
 
@@ -3652,7 +3652,7 @@ const OptimusPy = (function () {
       policyGroup.appendChild(el("label", { className: "form-label", for: "optdb-string-policy" }, "String dimensions"));
       const policySelect = el("select", { className: "form-input", id: "optdb-string-policy" },
         el("option", { value: "skip_any" }, "Skip any cube with string elements"),
-        el("option", { value: "pin_last" }, "Pin the string dimension last"),
+        el("option", { value: "pin_last" }, "Keep the string dimension last"),
       );
       policySelect.value = this._stringPolicy;
       policySelect.addEventListener("change", () => { this._stringPolicy = policySelect.value; });
@@ -3667,7 +3667,7 @@ const OptimusPy = (function () {
       revertCb.checked = this._revertOnRegression;
       revertCb.addEventListener("change", () => { this._revertOnRegression = revertCb.checked; });
       revertLabel.appendChild(revertCb);
-      revertLabel.appendChild(el("span", { className: "text-sm" }, "Revert a cube that gets worse"));
+      revertLabel.appendChild(el("span", { className: "text-sm" }, "Revert a cube that ends up using more memory"));
       flagsGroup.appendChild(revertLabel);
       const choresLabel = el("label", { className: "checkbox-label", style: "cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:6px" });
       const choresCb = el("input", { type: "checkbox" });
@@ -3676,7 +3676,7 @@ const OptimusPy = (function () {
       choresLabel.appendChild(choresCb);
       choresLabel.appendChild(el("span", { className: "text-sm" }, "Disable active chores for the run"));
       flagsGroup.appendChild(choresLabel);
-      flagsGroup.appendChild(el("div", { className: "form-hint" }, "Chores are re-activated on every exit path; a killed process leaves them off"));
+      flagsGroup.appendChild(el("div", { className: "form-hint" }, "Re-activated when the run ends, even if it fails. If OptimusPy itself is killed they stay off; re-enable them under Previous runs"));
       row2.appendChild(flagsGroup);
       card.appendChild(row2);
 
@@ -3691,7 +3691,7 @@ const OptimusPy = (function () {
       runBtn.addEventListener("click", () => this._runPlan(runBtn));
       actions.appendChild(runBtn);
       actions.appendChild(el("span", { className: "text-xs text-tertiary" },
-        "Building a plan is read-only. Running it rebuilds cubes on the server."));
+        "Building a plan only reads from TM1. Running it reorders the cubes on the server."));
       card.appendChild(actions);
 
       return card;
@@ -3775,7 +3775,7 @@ const OptimusPy = (function () {
         this._renderPlan($("#optdb-plan"));
         const runBtn = $("#optdb-run-btn");
         if (runBtn) runBtn.disabled = !(plan.cubes || []).length;
-        Toast.success(`Plan ready — ${(plan.cubes || []).length} cube(s) queued`);
+        Toast.success(`Plan ready — ${(plan.cubes || []).length} cube(s) to reorder`);
       } catch (err) {
         Toast.error(err.message);
       } finally {
@@ -3792,7 +3792,7 @@ const OptimusPy = (function () {
         container.appendChild(el("div", { className: "empty-state" },
           el("div", { className: "empty-state-title" }, "No plan yet"),
           el("div", { className: "empty-state-text" },
-            "Build a plan to see which cubes would be reordered, in what order, and which are skipped. Planning reads the model only — nothing is written to the server."),
+            "Build a plan to see which cubes would be reordered, in what order, and which are skipped. Building a plan only reads from TM1 — nothing is changed."),
         ));
         return;
       }
@@ -3806,28 +3806,28 @@ const OptimusPy = (function () {
         el("div", { className: "stat-card-value" }, value),
         hint ? el("div", { className: "stat-card-hint" }, hint) : null,
       ));
-      stat("Model RAM", optdbGb(plan.total_model_ram_bytes));
-      stat("Covered", optdbGb(plan.planned_ram_bytes), "RAM of the cubes in the queue");
-      stat("Coverage", (plan.coverage_pct || 0).toFixed(1) + "%", "Share of model RAM this pass touches");
+      stat("Cube memory", optdbGb(plan.total_model_ram_bytes), "All cubes on the instance");
+      stat("In this plan", optdbGb(plan.planned_ram_bytes), "Memory of the cubes to reorder");
+      stat("Share", (plan.coverage_pct || 0).toFixed(1) + "%", "Of all cube memory, the part this plan reorders");
       stat("Cubes", String(cubes.length), `${skipped.length} skipped`);
       container.appendChild(stats);
 
       const queueCard = el("div", { className: "card mb-4" });
       queueCard.appendChild(el("div", { className: "card-title mb-2" },
-        `Cube queue (${cubes.length})`));
+        `Cubes to reorder (${cubes.length})`));
       queueCard.appendChild(el("div", { className: "text-sm text-secondary mb-2" },
-        `Plan ${plan.plan_id} — processed top to bottom, ${plan.options && plan.options.order === "desc" ? "largest first" : "smallest first"}.`));
+        `Plan ${plan.plan_id} — reordered top to bottom, ${plan.options && plan.options.order === "desc" ? "largest cube first" : "smallest cube first"}.`));
       if (cubes.length === 0) {
-        queueCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No cube qualifies — nothing would run."));
+        queueCard.appendChild(el("div", { className: "text-secondary text-sm" }, "No cube qualifies — nothing would be reordered."));
       } else {
         const rows = cubes.map((c, i) => Object.assign({ position: i + 1 }, c));
         const tbl = createTable({
           columns: [
             { key: "position", label: "#", align: "right" },
             { key: "cube", label: "Cube", render: r => el("span", { className: "font-medium" }, r.cube) },
-            { key: "ram_bytes", label: "RAM", align: "right", value: r => formatBytes(r.ram_bytes || 0), sortValue: r => r.ram_bytes || 0 },
+            { key: "ram_bytes", label: "Memory", align: "right", value: r => formatBytes(r.ram_bytes || 0), sortValue: r => r.ram_bytes || 0 },
             {
-              key: "target_order", label: "Target order", sortable: false,
+              key: "target_order", label: "New dimension order", sortable: false,
               render: r => el("span", { className: "optdb-order" }, (r.target_order || []).join(" \u2192 ")),
             },
           ],
@@ -3871,8 +3871,8 @@ const OptimusPy = (function () {
       const card = el("div", { className: "card mb-4" });
       card.appendChild(el("div", { className: "card-title mb-2" }, `Active chores (${chores.length})`));
       card.appendChild(el("div", { className: "text-sm text-secondary mb-2" }, willDisable
-        ? "These chores are deactivated when the run starts and re-activated on every exit path. If the process is killed they stay off — use the recovery list below."
-        : "These chores stay active during the run. Turn on 'Disable active chores' to deactivate exactly these for its duration."));
+        ? "These chores are deactivated when the run starts and re-activated when it ends, even if it fails. If OptimusPy itself is killed they stay off; re-enable them under Previous runs below."
+        : "These chores keep running during the run. Tick 'Disable active chores for the run' to switch exactly these off while it runs."));
       if (chores.length === 0) {
         card.appendChild(el("div", { className: "text-secondary text-sm" }, "No chore is active on this instance."));
       } else {
@@ -3888,11 +3888,11 @@ const OptimusPy = (function () {
       const plan = this._plan;
       if (!plan) return;
       if (this._planKeyNow() !== this._planKey) {
-        Toast.error("The instructions changed after this plan was built — build the plan again before running it");
+        Toast.error("The run settings changed after this plan was built — build the plan again before running it");
         return;
       }
       this._confirmRun(plan.instance, plan.plan_id,
-        `Reorder ${(plan.cubes || []).length} cube(s) on '${plan.instance}' exactly as listed in plan ${plan.plan_id}? Each cube is rebuilt in place on the server.`,
+        `Reorder ${(plan.cubes || []).length} cube(s) on '${plan.instance}' exactly as listed in plan ${plan.plan_id}? Each cube is locked on the server while TM1 reorders it.`,
         btn);
     },
 
@@ -3951,7 +3951,7 @@ const OptimusPy = (function () {
       if (run.deadline_at && !run.finished_at) {
         const left = run.deadline_at - Date.now() / 1000;
         budget = left > 0 ? ` · ${optdbDuration(left)} of the time limit left`
-          : " · time limit reached — stops after the cube in flight";
+          : " · time limit reached — stops after the cube being reordered";
       }
       container.appendChild(el("div", { className: "text-sm text-secondary mb-2" },
         `${finished} of ${cubes.length} cubes finished${budget}`));
@@ -3960,7 +3960,7 @@ const OptimusPy = (function () {
           { key: "position", label: "#", align: "right" },
           { key: "cube", label: "Cube" },
           { key: "status", label: "Status", render: r => el("span",
-            { className: `badge ${OPTDB_CUBE_BADGES[r.status] || "badge-neutral"}` }, r.status.replace("_", " ")) },
+            { className: `badge ${OPTDB_CUBE_BADGES[r.status] || "badge-neutral"}` }, r.status === "in_flight" ? "reordering" : r.status) },
           { key: "pct_change", label: "RAM change", align: "right",
             value: r => r.pct_change == null ? "—" : `${r.pct_change > 0 ? "+" : ""}${r.pct_change.toFixed(2)}%` },
           { key: "duration_s", label: "Took", align: "right",
@@ -3991,7 +3991,7 @@ const OptimusPy = (function () {
         stopBtn.textContent = "Stopping\u2026";
         try {
           await Api.cancelJob(this._jobId);
-          Toast.info("Stopping — the cube in flight finishes first");
+          Toast.info("Stopping — the cube being reordered finishes first");
         } catch (e) {
           Toast.error("Cancel failed: " + e.message);
           stopBtn.disabled = false;
@@ -4057,8 +4057,8 @@ const OptimusPy = (function () {
           this._renderRunSummary(summary, run);
           this._renderRecovery($("#optdb-recovery"));
           if (nothingToRun) Toast.info("No cube qualified — nothing was reordered");
-          else if (data && data.success) Toast.success("Optimize DB pass finished — restart TM1 to realise the saving");
-          else Toast.warning(`Optimize DB pass ended: ${OPTDB_RUN_STATUS[status] || status || "unknown"}`);
+          else if (data && data.success) Toast.success("Optimize DB finished — restart TM1 to see the memory saving");
+          else Toast.warning(`Optimize DB ended: ${OPTDB_RUN_STATUS[status] || status || "unknown"}`);
         } else if (event === "cancelled") {
           statusDot.className = "status-dot failed";
           statusText.textContent = "Cancelled";
@@ -4077,7 +4077,7 @@ const OptimusPy = (function () {
       if (!run) return;
       if (!run.status) {
         container.appendChild(el("div", { className: "text-sm text-secondary" },
-          "No cube qualified under these instructions — nothing was reordered."));
+          "No cube qualified under these run settings — nothing was reordered."));
         return;
       }
       const totals = run.totals || {};
@@ -4089,10 +4089,10 @@ const OptimusPy = (function () {
       ));
       stat("Outcome", OPTDB_RUN_STATUS[run.status] || run.status || "—", `Plan ${run.plan_id || "—"}`);
       stat("Reordered", String(totals.cubes_reordered || 0),
-        `${totals.cubes_reverted || 0} reverted · ${totals.cubes_failed || 0} failed · ${totals.cubes_pending || 0} not reached`);
+        `${totals.cubes_reverted || 0} reverted · ${totals.cubes_failed || 0} failed · ${totals.cubes_pending || 0} not started`);
       stat("Expected saving", formatBytes(totals.bytes_saved || 0), "Visible after a TM1 restart");
-      stat("Mean change", (totals.mean_pct_change || 0).toFixed(2) + "%", "Per reordered cube");
-      stat("Elapsed", optdbDuration(totals.elapsed_s || 0), `Limit ${(run.options && run.options.time_limit_hours) || "—"}h — checked between cubes only`);
+      stat("Average change", (totals.mean_pct_change || 0).toFixed(2) + "%", "Per reordered cube");
+      stat("Elapsed", optdbDuration(totals.elapsed_s || 0), `Limit ${(run.options && run.options.time_limit_hours) || "—"}h — checked before each cube`);
       container.appendChild(stats);
 
       const chores = run.chores || {};
@@ -4171,7 +4171,7 @@ const OptimusPy = (function () {
             render: r => r.status === "completed" ? null : el("button", {
               className: "btn btn-ghost btn-sm",
               onClick: e => this._confirmRun(r.instance, r.plan_id,
-                `Continue run ${r.plan_id} on '${r.instance}'? Cubes it already finished are re-checked and kept; the rest run against the run's original deadline.`,
+                `Continue run ${r.plan_id} on '${r.instance}'? Cubes already done are checked and kept; the rest are reordered in the time left from the original limit.`,
                 e.currentTarget),
             }, "Resume"),
           },

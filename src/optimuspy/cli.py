@@ -154,8 +154,8 @@ def main():
     parser = argparse.ArgumentParser(description="OptimusPy v2.0 — TM1 Cube Dimension Order Optimizer")
     parser.add_argument('mode', choices=['optimize', 'set', 'scan', 'optimize-db', 'ui'],
                         help="Run mode: 'optimize' benchmarks orders, 'set' applies a specific order, "
-                             "'scan' discovers optimization candidates, 'optimize-db' applies the "
-                             "heuristic order to every cube in an instance under a time limit, "
+                             "'scan' discovers optimization candidates, 'optimize-db' reorders every "
+                             "cube on an instance by leaf-element count, within a time limit, "
                              "'ui' opens the web UI (its options: --port, --config)")
     parser.add_argument('cube_config', nargs='?', default=None,
                         help="Path to cube JSON configuration file (required for optimize/set)")
@@ -183,8 +183,8 @@ def main():
     parser.add_argument('--plan', dest='plan_path', default=None,
                         help="Execute a plan file produced by --dry-run (optimize-db only)")
     parser.add_argument('--resume', dest='resume_plan_id', default=None,
-                        help="Resume an interrupted run by plan id, against its original "
-                             "deadline (optimize-db only)")
+                        help="Resume an interrupted run by plan id, in the time left from its "
+                             "original limit (optimize-db only)")
     parser.add_argument('--restore-chores', dest='restore_chores_plan_id', default=None,
                         help="Re-activate the chores a crashed run left disabled, by plan id "
                              "(optimize-db only)")
