@@ -79,6 +79,43 @@ def test_configure_logging_does_not_stack_stdout_handlers(logging_sandbox):
     assert len(logging_sandbox.handlers) == count
 
 
+@pytest.fixture
+def bare_root_logger():
+    """The root logger, with its handlers and level restored afterwards.
+
+    The test itself empties the handlers: pytest adds its capture handler after
+    fixtures run, and basicConfig does nothing while any handler is attached.
+    """
+    root = logging.getLogger()
+    before_handlers, before_level = root.handlers[:], root.level
+    yield root
+    for handler in root.handlers:
+        handler.close()
+    root.handlers = before_handlers
+    root.setLevel(before_level)
+
+
+def test_the_log_is_written_under_the_install_dir(bare_root_logger, monkeypatch, tmp_path):
+    # Not in the folder the command runs from: the log is always in one place.
+    install_dir = tmp_path / "install"
+    run_dir = tmp_path / "run"
+    install_dir.mkdir()
+    run_dir.mkdir()
+    monkeypatch.setattr("optimuspy.core.get_app_base_dir", lambda: install_dir)
+    monkeypatch.chdir(run_dir)
+
+    bare_root_logger.handlers = []
+    configure_logging()
+    logging.info("a line for the logfile")
+    for handler in bare_root_logger.handlers:
+        handler.flush()
+
+    log = install_dir / "logs" / "optimuspy.log"
+    assert log.exists()
+    assert "a line for the logfile" in log.read_text(encoding="utf-8")
+    assert list(run_dir.iterdir()) == []
+
+
 def _greedy_run(orders_to_ignore=None):
     """Run Fold A and return the orders it evaluated."""
     ex = make_main_executor(DIMS, CARD, orders_to_ignore=orders_to_ignore)

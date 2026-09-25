@@ -128,3 +128,50 @@ def test_the_banner_survives_a_console_that_cannot_encode_it(tmp_path):
                           cwd=tmp_path, env=env, capture_output=True)
     assert done.returncode == 0, done.stderr.decode("cp1252", "replace")
     assert b"optimize-db" in done.stdout
+
+
+# --- an instance that is not in config.ini --------------------------------
+
+def test_set_with_an_unknown_instance_is_a_one_line_error(monkeypatch, tmp_path, capsys):
+    # set and optimize share core.main, so one of them covers both.
+    import json
+
+    cube_json = tmp_path / "cube.json"
+    cube_json.write_text(json.dumps({
+        "instance": "nosuch", "cube": "Sales", "executions": 1, "output": "csv",
+        "predefined_orders": [["Time", "Region"]]}))
+    monkeypatch.setattr(
+        sys, "argv",
+        ["optimuspy", "set", str(cube_json), "--config", str(_write_config_ini(tmp_path))])
+
+    code = main()
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "ERROR: Instance 'nosuch' not found in" in out
+    assert "Traceback" not in out
+
+
+def test_scan_with_an_unknown_instance_is_a_one_line_error(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        sys, "argv",
+        ["optimuspy", "scan", "--instance", "nosuch",
+         "--config", str(_write_config_ini(tmp_path))])
+
+    code = main()
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "ERROR: Instance 'nosuch' not found in" in out
+    assert "Traceback" not in out
+
+
+def test_tm1_params_applies_a_password_given_on_the_command_line(tmp_path):
+    from optimuspy.core import APP_NAME, tm1_params
+
+    params = tm1_params(str(_write_config_ini(tmp_path)), "tm1srv01", "plain-secret")
+
+    assert params["address"] == "localhost"
+    assert params["password"] == "plain-secret"
+    assert params["decode_b64"] is False
+    assert params["session_context"] == APP_NAME

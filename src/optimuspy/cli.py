@@ -7,14 +7,13 @@ from contextlib import suppress
 from TM1py import TM1Service
 
 from optimuspy.core import (
-    APP_NAME,
     configure_logging,
-    get_tm1_config,
     load_cube_config,
     validate_cube_config,
     main as run_optimize,
     resolve_config_path,
     set_current_directory,
+    tm1_params,
     _execute_scan_mode,
 )
 from optimuspy.optimize_db import (
@@ -32,15 +31,8 @@ def tm1_connector(config_ini_path: str, instance: str, password: str = None):
     A factory rather than a service: `optimize-db` reconnects mid-run after a
     dropped connection, so it needs to be able to build a new one.
     """
-    config = get_tm1_config(config_ini_path)
-    if instance not in config:
-        raise ValueError(f"Instance '{instance}' not found in {config_ini_path}")
-    tm1_args = dict(config[instance])
-    tm1_args['session_context'] = APP_NAME
-    if password:
-        tm1_args['password'] = password
-        tm1_args['decode_b64'] = False
-    return lambda: TM1Service(**tm1_args)
+    params = tm1_params(config_ini_path, instance, password)  # an unknown instance fails here
+    return lambda: TM1Service(**params)
 
 
 def _run_optimize_db(parser, cmd_args, config_ini_path: str) -> int:
@@ -179,7 +171,7 @@ def main():
     parser.add_argument('--output', dest='output_dir', default=None,
                         help="Output directory for generated JSON config files (scan only)")
     parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
-                        help="Build and print the plan without touching the server (optimize-db only)")
+                        help="Build and print the plan without changing anything (optimize-db only)")
     parser.add_argument('--plan', dest='plan_path', default=None,
                         help="Execute a plan file produced by --dry-run (optimize-db only)")
     parser.add_argument('--resume', dest='resume_plan_id', default=None,
@@ -213,14 +205,13 @@ def main():
 
         logging.info(f"Starting OptimusPy v2.0. Mode: scan, Instance: {cmd_args.instance}")
 
-        config = get_tm1_config(config_location.path)
-        tm1_args = dict(config[cmd_args.instance])
-        tm1_args['session_context'] = APP_NAME
-        if cmd_args.password:
-            tm1_args['password'] = cmd_args.password
-            tm1_args['decode_b64'] = False
+        try:
+            params = tm1_params(config_location.path, cmd_args.instance, cmd_args.password)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            return 1
 
-        with TM1Service(**tm1_args) as tm1:
+        with TM1Service(**params) as tm1:
             success = _execute_scan_mode(
                 tm1, cmd_args.instance, cmd_args.ram_percent, cmd_args.output_dir)
     else:

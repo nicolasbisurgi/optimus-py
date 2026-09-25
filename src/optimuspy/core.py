@@ -77,7 +77,8 @@ def configure_logging(verbose: bool = False):
     """
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        filename=LOGFILE,
+        filename=get_logfile_path(),
+        encoding="utf-8",
         format="%(asctime)s - " + APP_NAME + " - %(levelname)s - %(message)s",
         level=level,
     )
@@ -95,6 +96,23 @@ def get_tm1_config(config_ini_path: str):
     config = configparser.ConfigParser()
     config.read(config_ini_path, encoding="utf-8")
     return config
+
+
+def tm1_params(config_ini_path: str, instance: str, password: str = None) -> dict:
+    """Return the TM1Service keyword arguments for one config.ini instance.
+
+    A password given on the command line replaces the one in config.ini and is
+    taken as plain text.
+    """
+    config = get_tm1_config(config_ini_path)
+    if instance not in config:
+        raise ValueError(f"Instance '{instance}' not found in {config_ini_path}")
+    params = dict(config[instance])
+    params['session_context'] = APP_NAME
+    if password:
+        params['password'] = password
+        params['decode_b64'] = False
+    return params
 
 
 class ConfigLocation(NamedTuple):
@@ -323,14 +341,7 @@ def main(mode: str, cube_config: dict, config_ini_path: str, password: str = Non
     optimize_dimension = cube_config.get('optimize_dimension')
     process_parameters = cube_config.get('process_parameters', {})
 
-    config = get_tm1_config(config_ini_path)
-    tm1_args = dict(config[instance_name])
-    tm1_args['session_context'] = APP_NAME
-    if password:
-        tm1_args['password'] = password
-        tm1_args['decode_b64'] = False
-
-    with TM1Service(**tm1_args) as tm1:
+    with TM1Service(**tm1_params(config_ini_path, instance_name, password)) as tm1:
         # Expose tm1 service for external cancellation (UI stop button)
         if tm1_holder is not None:
             tm1_holder["tm1"] = tm1
