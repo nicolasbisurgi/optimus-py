@@ -7,6 +7,8 @@ Find the ideal dimension order for your TM1 cubes
 
 Supported versions: TM1 v11 and v12 (PAoC/PAaaS).
 
+What's new in 2.0.0, and how to upgrade from 1.x: [CHANGELOG.md](CHANGELOG.md).
+
 ## Installing
 
 Install required python packages:

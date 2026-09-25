@@ -343,8 +343,6 @@ The sections above are the tour. The requirement documents are the specification
 We'd love your feedback. What features would make OptimusPy more useful for your TM1 optimization workflow?
 
 Some ideas under consideration:
-- MkDocs documentation site
-- Batch mode (optimize multiple cubes in sequence)
 - Scheduling / cron integration
 - Email notifications on completion
 - Comparison reports (before vs after)
