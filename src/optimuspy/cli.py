@@ -121,7 +121,7 @@ def print_banner():
           ├───┼───┼───┤  ──▶ ├───┼───┼───┤
           │{G} 2 {S}│{G} 5 {S}│{G} 6 {S}│      │{G} 4 {S}│{G} 5 {S}│{G} 6 {S}│
           └───┴───┴───┘      └───┴───┴───┘{R}
-           {D}   scrambled    ──▶    optimized{R}
+           {D} scrambled    ──▶    optimized{R}
 
           {I}{D}"Till all are optimized." — Optimus Py{R}
 
