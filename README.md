@@ -11,42 +11,26 @@ What's new in 2.0.0, and how to upgrade from 1.x: [CHANGELOG.md](CHANGELOG.md).
 
 ## Installing
 
-Install required python packages:
-```
-pip install TM1py
-pip install seaborn
-```
+- **Without Python:** download the Windows or Linux bundle. Each holds the executable, `config/config.ini.example` and `samples/` (example cube configs).
+- **With Python 3.9 or later:** clone the repository and run `pip install -e .`, which installs the dependencies and adds the `optimuspy` command.
 
-Clone or download the `optimus-py` Repository from GitHub
-
+Both are described step by step in [Installation](https://cubewise-code.github.io/optimus-py/getting-started/installation/).
 
 ## Usage
 
-* Adjust config.ini to match your TM1 environment
-* Create uniquely named views in the relevant cubes
-* Execute the `optimuspy.py` 
-* provide 8 arguments: 
-    -i _(name of the instance)_ 
-    -c _(name of the cube)_ 
-    -v _(name of the cube view)_ 
-    -e _(number of execution)_ 
-    -f _(fast mode: True or False)_
-    -o _(output: csv or xlsx)_ 
-    -u _(update original order: True or False)_
-    -t _(name of a ti process to measure runtime)_
-    -d _(optional: comma split list of dimensions to keep positions as per the storage order)_
+Describe the cube in a JSON file, then run it:
 
-```
-C:\Projects\optimus-py\optimuspy.py -i="tm1srv01" -c="Cube Name" -v="Optimus" -e="10" -f="True" -o="csv" -u=True -t="load.csv.file"
+```bash
+optimuspy optimize samples/optimize.json
 ```
 
-```
-C:\Projects\optimus-py\optimuspy.py --instance="tm1srv01" --cube="Cube Name" --view="Optimus" --executions="15" --fast="True" --output="csv" --update=True --process="load.csv.file"
+Or open the web UI at `http://127.0.0.1:8765` (double-clicking the executable does the same):
+
+```bash
+optimuspy ui
 ```
 
-You can use this public Google Sheet to construct the command prompt for the execution
-
-https://docs.google.com/spreadsheets/d/1dtgl9WkYcsyokWNdX29m4K_5oNm3MI3iTOH2f_g6Kd4/edit?usp=sharing
+Every mode, option and JSON field is documented on the [documentation site](https://cubewise-code.github.io/optimus-py/).
 
 ## Modes
 
@@ -56,6 +40,7 @@ https://docs.google.com/spreadsheets/d/1dtgl9WkYcsyokWNdX29m4K_5oNm3MI3iTOH2f_g6
 | `set` | Apply a specific order to one cube without benchmarking |
 | `scan` | Discover candidate cubes in an instance, ranked by RAM |
 | `optimize-db` | Reorder every cube in an instance with one simple rule — dimensions ordered by leaf-element count, fewest first — within a time limit. Nothing is benchmarked. Run it overnight on a dedicated instance, restart TM1, then run the real `optimize` exercise against a smaller footprint |
+| `ui` | Open the web UI (its options: `--port`, `--config`) |
 
 ```bash
 optimuspy optimize my_cube.json
@@ -79,21 +64,7 @@ python -m optimuspy.ui --config C:\shared\config.ini
 
 ## Output
 
-OptimusPy determines the ideal dimension order for every cube, based on RAM and query speed.
-For traceability and custom analysis, Optimus visualizes the results in a csv report and a scatter plot per cube.
-
-
-|ID |Mode          |Mean Query Time|RAM   |Dimension1   |Dimension2  |Dimension3  |Dimension4  |Dimension5   |Dimension6  |Dimension7|Dimension8|Dimension9   |
-|---|--------------|---------------|------|-------------|------------|------------|------------|-------------|------------|----------|----------|-------------|
-|1  |Original Order|0.00445528     |259072|Industry     |SalesMeasure|Product     |Executive   |Business Unit|Customer    |Version   |State     |Time         |
-|2  |Iterations    |0.00379407     |520184|SalesMeasure |Customer    |Executive   |Industry    |Product      |State       |Time      |Version   |Business Unit|
-|3  |Iterations    |0.00378995     |520184|Business Unit|SalesMeasure|Executive   |Industry    |Product      |State       |Time      |Version   |Customer     |
-|4  |Iterations    |0.00422788     |520184|Business Unit|Customer    |SalesMeasure|Industry    |Product      |State       |Time      |Version   |Executive    |
-|5  |Iterations    |0.00458372     |520184|Business Unit|Customer    |Executive   |SalesMeasure|Product      |State       |Time      |Version   |Industry     |
-|6  |Iterations    |0.00479290     |259072|Business Unit|Customer    |Executive   |Industry    |SalesMeasure |State       |Time      |Version   |Product      |
-|7  |Iterations    |0.00548539     |259072|Business Unit|Customer    |Executive   |Industry    |Product      |SalesMeasure|Time      |Version   |State        |
-
-![](https://github.com/cubewise-code/optimus-py/blob/master/images/scatter_plot.png)
+Each run writes an HTML report to `results/<instance>/`, in the folder you run from, plus a `.csv` or `.xlsx` of the same name (the config's `output` field). See [Results Page](https://cubewise-code.github.io/optimus-py/ui/results-page/).
 
 ## Considerations
 - Ideally run on the same machine as TM1
@@ -101,24 +72,21 @@ For traceability and custom analysis, Optimus visualizes the results in a csv re
 - Choose a sensible number of `executions` between 5 and 10
 - Provide enough spare memory on TM1 server
 - Fast mode (`fast: true`) seeds from the cardinality-suggested order, then coordinate-descent refines only the dimensions leaf-count tolerance (τ) leaves undecided (≤2 passes); the default thorough fold searches the full τ-frontier
-- XLSX output is preferable over CSV output but requires optional `xlsxwrite` dependency
 - Choose a TI that loads data to the cube and runs for at least a few seconds
 
-## Need a .exe version of OptimusPy?
+## Executable bundles
 
-The latest executable build is available as an artifact in the GitHub Actions workflow runs. To download it:
-
-1. Go to the [Actions tab](https://github.com/cubewise-code/optimus-py/actions) of the repository.
-2. Click on the most recent workflow run titled **Build Executable**.
-3. In the workflow summary, look for the **Artifacts** section.
-4. Download the **optimuspy-winOS** artifact.
+The **Build Executable** workflow builds a Windows and a Linux bundle on every run and keeps them as the `optimuspy-windows` and `optimuspy-linux` artifacts of that run, on the [Actions tab](https://github.com/cubewise-code/optimus-py/actions). Builds from `master` also publish `optimuspy-windows.zip` and `optimuspy-linux.tar.gz` on the [Releases page](https://github.com/cubewise-code/optimus-py/releases). See [Installation](https://cubewise-code.github.io/optimus-py/getting-started/installation/).
 
 ## Built With
 
 * [TM1py](https://github.com/cubewise-code/TM1py) - A python wrapper for the TM1 REST API
-* [matplotlib](https://github.com/matplotlib/matplotlib) - A comprehensive library for crating visualizations in Python.
-
+* [mdxpy](https://pypi.org/project/mdxpy/)
+* [pandas](https://pypi.org/project/pandas/)
+* [XlsxWriter](https://pypi.org/project/XlsxWriter/)
+* [Jinja2](https://pypi.org/project/Jinja2/)
+* [configparser](https://pypi.org/project/configparser/)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
