@@ -2,7 +2,7 @@
 
 ## 2.0.1
 
-Fork test of a patch release. See [Installation](docs/getting-started/installation.md).
+Fork test of a patch release, and of a merge with no label. See [Installation](docs/getting-started/installation.md).
 
 ## 2.0.0
 
