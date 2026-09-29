@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1
+
+Fork test of a patch release. See [Installation](docs/getting-started/installation.md).
+
 ## 2.0.0
 
 OptimusPy finds a better storage dimension order for your TM1 cubes and can apply it. In 2.0.0 you work either in a web UI or on the command line, where each cube is described in a JSON file you can keep and run again. It supports TM1 v11 and v12, and it ships as a Windows or Linux bundle that runs without Python. New to OptimusPy? Start with the [User Guide](docs/guide/choose-a-mode.md).
